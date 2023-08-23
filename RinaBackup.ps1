@@ -95,7 +95,7 @@ function Read-Configuration ([string]$ConfigFile) {
 }
 
 # Recursively expand environment variables
-function Expand-EnvironmentVariables([object]$InputObject) {
+function Expand-EnvironmentVariables ([object]$InputObject) {
     if ($InputObject -is [string]) {
         return [System.Environment]::ExpandEnvironmentVariables($InputObject)
     }
@@ -113,7 +113,7 @@ function Expand-EnvironmentVariables([object]$InputObject) {
 }
 
 # Compress archive using 7-Zip
-function Compress-Archive([hashtable]$config) {
+function Compress-Archive ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     # Check for running processes in source directories
     if ($config.CheckProc -and (Test-ProcessPath -Path $config.Sources)) {
@@ -146,7 +146,7 @@ function Compress-Archive([hashtable]$config) {
 
 # Tests if any running process paths match or are contained within a given set
 # of paths. Constructs a trie structure and checks the paths against the trie.
-function Test-ProcessPath([string[]]$Path) {
+function Test-ProcessPath ([string[]]$Path) {
     $processes = Get-Process | Select-Object -ExpandProperty Path -Unique
     $sep = [IO.Path]::DirectorySeparatorChar
     $trie = @{}
@@ -187,7 +187,7 @@ function Test-ProcessPath([string[]]$Path) {
 }
 
 # Backup OneDrive folder
-function Backup-OneDrive([hashtable]$config) {
+function Backup-OneDrive ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     foreach ($d in $config.Source, $config.Destination) {
         if (-not $(try { Test-Path -LiteralPath $d.Trim() -PathType Container } catch { $false })) {
@@ -226,7 +226,7 @@ function Backup-OneDrive([hashtable]$config) {
         FILE_ATTRIBUTE_UNPINNED : False
         FILE_ATTRIBUTE_OFFLINE  : False
 #>
-function Set-UnpinIfNotPinned([string]$Path) {
+function Set-UnpinIfNotPinned ([string]$Path) {
     $PINNED = 0x00080000
     $UNPINNED = 0x00100000
     $COMBINED = $UNPINNED -bor $PINNED
@@ -240,7 +240,7 @@ function Set-UnpinIfNotPinned([string]$Path) {
 }
 
 # Backup VMWare virtual machines
-function Backup-VMWare([hashtable]$config) {
+function Backup-VMWare ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     try {
         $rightDirs = @(Get-ChildItem -LiteralPath $config.Destination -Directory -ErrorAction Stop)
