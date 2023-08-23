@@ -34,7 +34,7 @@
 # Write log messages with a timestamp
 function Write-Log ([string]$Message) {
     Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'MM/dd/yyyy HH:mm')] ${Message}"
-    Write-Host $Message
+    Write-Output $Message
 }
 
 function Read-Configuration ([string]$ConfigFile) {
