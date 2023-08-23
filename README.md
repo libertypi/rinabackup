@@ -1,2 +1,2 @@
-# rinabackup
+# RinaBackup
 An automated backup script.
