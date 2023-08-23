@@ -113,7 +113,7 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
 }
 
 # Compress archive using 7-Zip
-function Compress-Archive ([hashtable]$config) {
+function Update-Archive ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     # Check for running processes in source directories
     if ($config.CheckProc -and (Test-ProcessPath -Path $config.Sources)) {
@@ -291,7 +291,7 @@ $Configuration = Read-Configuration (Join-Path $PSScriptRoot "Config_${env:COMPU
 
 # Execute Archiving
 if ($Configuration.Archive.Enabled) {
-    Compress-Archive -config $Configuration.Archive
+    Update-Archive -config $Configuration.Archive
 }
 
 # Execute OneDrive Backup
