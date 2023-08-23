@@ -23,7 +23,7 @@
 #           \|___|                   \/____/                  \/____/                  \/____/           #
 #                                                                                                        #
 #                                                                                                        #
-#     Author: David                                                                                      #
+#     Author: David Pi                                                                                   #
 #     Assisted by: ChatGPT - OpenAI                                                                      #
 #     To Rina                                                                                            #
 #                                                                                                        #
