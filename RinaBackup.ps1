@@ -34,7 +34,7 @@
 # Write log messages with a timestamp
 function Write-Log ([string]$Message) {
     Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'MM/dd/yyyy HH:mm')] ${Message}"
-    Write-Output $Message
+    Write-Host $Message
 }
 
 function Read-Configuration ([string]$ConfigFile) {
@@ -100,8 +100,8 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
         return [System.Environment]::ExpandEnvironmentVariables($InputObject)
     }
     elseif ($InputObject -is [hashtable]) {
-        foreach ($key in @($InputObject.Keys)) {
-            $InputObject[$key] = Expand-EnvironmentVariables $InputObject[$key]
+        foreach ($i in @($InputObject.Keys)) {
+            $InputObject[$i] = Expand-EnvironmentVariables $InputObject[$i]
         }
     }
     elseif ($InputObject -is [array]) {
