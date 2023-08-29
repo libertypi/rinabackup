@@ -230,10 +230,9 @@ function Set-UnpinIfNotPinned ([string]$Path) {
     $PINNED = 0x00080000
     $UNPINNED = 0x00100000
     $COMBINED = $UNPINNED -bor $PINNED
+    # If neither Unpinned nor Pinned, add Unpinned attribute.
     Get-ChildItem -LiteralPath $Path -Recurse -Attributes !Offline+!ReadOnly | ForEach-Object {
-        # If neither Unpinned nor Pinned, add Unpinned attribute.
         if (!($_.Attributes -band $COMBINED)) {
-            Write-Output "Unpin: $($_.FullName)"
             $_.Attributes = $_.Attributes -bor $UNPINNED
         }
     }
