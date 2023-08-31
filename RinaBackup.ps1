@@ -89,7 +89,7 @@ function Read-Configuration ([string]$ConfigFile) {
 }
 '@
         Set-Content -LiteralPath $ConfigFile -Value $default
-        Write-Host "Configuration file not found. An empty one has been created at '${ConfigFile}'. Edit the file before running this script again."
+        Write-Host "An empty configuration file has been created at '${ConfigFile}'. Edit the file before running this script again."
         exit 1
     }
 }
@@ -117,7 +117,7 @@ function Update-Archive ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     # Check for running processes in source directories
     if ($config.CheckProc -and (Test-ProcessPath -Path $config.Sources)) {
-        Write-Log 'Archiving skipped due to running processes in source directories.'
+        Write-Log 'Skipping archiving: running processes in source directories.'
         return
     }
     # Define common switches for the 7-Zip command
@@ -133,7 +133,7 @@ function Update-Archive ([hashtable]$config) {
             [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
         }
         catch {
-            Write-Error "Archiving skipped due to password decryption failure: $($_.Exception.Message)"
+            Write-Log "Skipping archiving: password decryption failure. $($_.Exception.Message)"
             return
         }
     }
@@ -147,7 +147,6 @@ function Update-Archive ([hashtable]$config) {
 # Tests if any running process paths match or are contained within a given set
 # of paths. Constructs a trie structure and checks the paths against the trie.
 function Test-ProcessPath ([string[]]$Path) {
-    $processes = Get-Process | Select-Object -ExpandProperty Path -Unique
     $sep = [IO.Path]::DirectorySeparatorChar
     $trie = @{}
     # Build trie
@@ -169,8 +168,8 @@ function Test-ProcessPath ([string[]]$Path) {
         # Use $sep to mark the end of a path
         $node[$sep] = $true
     }
-    # Check paths against trie
-    foreach ($p in $processes) {
+    # Check process paths against trie
+    foreach ($p in (Get-Process | Select-Object -ExpandProperty Path -Unique)) {
         $node = $trie
         foreach ($s in $p.Split($sep)) {
             if (-not $s) { continue }
@@ -191,7 +190,7 @@ function Backup-OneDrive ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     foreach ($d in $config.Source, $config.Destination) {
         if (-not $(try { Test-Path -LiteralPath $d.Trim() -PathType Container } catch { $false })) {
-            Write-Error "Skipping OneDrive backup: '${d}' is unreachable."
+            Write-Log "Skipping OneDrive backup: '${d}' is unreachable."
             return
         }
     }
@@ -246,7 +245,7 @@ function Backup-VMWare ([hashtable]$config) {
         $leftDirs = @(Get-ChildItem -LiteralPath $config.Source -Directory -ErrorAction Stop)
     }
     catch {
-        Write-Error "Skipping VM backup: $($_.Exception.Message)"
+        Write-Log "Skipping VM backup: $($_.Exception.Message)"
         return
     }
     $exclusion = [System.Collections.Generic.List[string]]::new()
@@ -260,7 +259,7 @@ function Backup-VMWare ([hashtable]$config) {
             foreach ($file in Get-ChildItem -LiteralPath $dir.FullName) {
                 if ($exts.Contains($file.Extension)) {
                     $exclusion.Add($dir.FullName)
-                    Write-Log "Skipping '$($dir.Name)' because the VM is not in a shutdown state."
+                    Write-Log "Skipping '$($dir.Name)': VM not in a shutdown state."
                     break
                 }
             }
@@ -285,7 +284,7 @@ function Backup-VMWare ([hashtable]$config) {
 }
 
 # Import Configuration
-$LogFile = Join-Path $PSScriptRoot "Log_${env:COMPUTERNAME}.log"
+$LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
 $Configuration = Read-Configuration (Join-Path $PSScriptRoot "Config_${env:COMPUTERNAME}.psd1")
 
 # Execute Archiving
