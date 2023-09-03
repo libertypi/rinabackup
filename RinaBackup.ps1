@@ -37,6 +37,17 @@ function Write-Log ([string]$Message) {
     Write-Host $Message
 }
 
+# Checks whether a backup is enabled and should run based on the configuration.
+function Test-BackupEnabled ([hashtable]$config) {
+    if ($config.Enabled) {
+        if ($config.OnlyRunOn) {
+            return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
+        }
+        return $true
+    }
+    return $false
+}
+
 function Read-Configuration ([string]$ConfigFile) {
     try {
         return Import-PowerShellDataFile -LiteralPath $ConfigFile -ErrorAction Stop
@@ -44,46 +55,60 @@ function Read-Configuration ([string]$ConfigFile) {
     catch [System.Management.Automation.ItemNotFoundException] {
         $default = @'
 <#
-    Configuration Notes:
+    Common Options:
+    - Enabled:      Enable or disable the backup section.
+    - OnlyRunOn:    Specifies days of the week for backup; an empty value skips the check.
+                    Accepts: @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday').
+
+    Archive Options:
+    - CheckProc:    Skip archiving if running processes are found in source.
+    - Executable:   Path to the 7-Zip executable.
+    - Sources:      Source directories to archive.
+    - Destination:  Destination path for the archive.
+    - Exclusion:    Patterns to exclude from archiving.
+    - Password:     Password for archive (DPAPI encrypted).
+
+    OneDrive Options:
+    - AutoUnpin:    Free up space except for "always keeps on this device" files.
+    - Source:       Source directory for OneDrive backup.
+    - Destination:  Destination path for OneDrive backup.
+
+    VMWare Options:
+    - SkipRunning:  Skip running VMs.
+    - KeepExtra:    Keep extra VMs in destination not found in source.
+    - Source:       Source directory for VMWare backup.
+    - Destination:  Destination path for VMWare backup.
+
+    Notes:
     - Environment variables can be used, enclosed in '%' (e.g. '%USERPROFILE%').
-    - Archive.Password requires an encrypted string using the Windows Data
-      Protection API (DPAPI). It can be created with the following command:
-      Read-Host -AsSecureString | ConvertFrom-SecureString
+    - Passwords require an encrypted string using the Windows Data Protection API (DPAPI).
+      They can be created with the following command: `Read-Host -AsSecureString | ConvertFrom-SecureString`
 #>
+
 @{
     Archive  = @{
         Enabled     = $false
-        # Skip archiving if running processes are found in source.
+        OnlyRunOn   = @()
         CheckProc   = $true
-        # Path to the 7-Zip executable.
         Executable  = ''
-        # Source directories to archive.
         Sources     = @()
-        # Destination path for the archive.
         Destination = ''
-        # Patterns to exclude from archiving.
         Exclusion   = @()
-        # Password for archive (DPAPI encrypted).
         Password    = ''
     }
     OneDrive = @{
         Enabled     = $false
-        # Free up space except "always keeps on this device" files.
+        OnlyRunOn   = @()
         AutoUnpin   = $false
-        # Source directory for OneDrive backup.
         Source      = '%OneDrive%'
-        # Destination path for OneDrive backup.
         Destination = ''
     }
     VMWare   = @{
         Enabled     = $false
-        # Skip running VMs.
+        OnlyRunOn   = @()
         SkipRunning = $true
-        # Keep extra VMs in destination not found in source.
         KeepExtra   = $true
-        # Source directory for VMWare backup.
         Source      = ''
-        # Destination path for VMWare backup.
         Destination = ''
     }
 }
@@ -105,7 +130,8 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
         }
     }
     elseif ($InputObject -is [array]) {
-        foreach ($i in 0..($InputObject.Length - 1)) {
+        $n = $InputObject.Length
+        for ($i = 0; $i -lt $n; $i++) {
             $InputObject[$i] = Expand-EnvironmentVariables $InputObject[$i]
         }
     }
@@ -288,16 +314,16 @@ $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
 $Configuration = Read-Configuration (Join-Path $PSScriptRoot "Config_${env:COMPUTERNAME}.psd1")
 
 # Execute Archiving
-if ($Configuration.Archive.Enabled) {
+if (Test-BackupEnabled -config $Configuration.Archive) {
     Update-Archive -config $Configuration.Archive
 }
 
 # Execute OneDrive Backup
-if ($Configuration.OneDrive.Enabled) {
+if (Test-BackupEnabled -config $Configuration.OneDrive) {
     Backup-OneDrive -config $Configuration.OneDrive
 }
 
 # Execute VMWare Backup
-if ($Configuration.VMWare.Enabled) {
+if (Test-BackupEnabled -config $Configuration.VMWare) {
     Backup-VMWare -config $Configuration.VMWare
 }
