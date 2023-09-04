@@ -31,22 +31,6 @@
 #                                                                                                        #
 ##########################################################################################################
 
-# Write log messages with a timestamp
-function Write-Log ([string]$Message) {
-    Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
-    Write-Host $Message
-}
-
-# Checks whether a backup is enabled and should run based on the configuration.
-function Test-BackupEnabled ([hashtable]$config) {
-    if ($config.Enabled) {
-        if ($config.OnlyRunOn) {
-            return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
-        }
-        return $true
-    }
-    return $false
-}
 
 function Read-Configuration ([string]$ConfigFile) {
     try {
@@ -117,6 +101,23 @@ function Read-Configuration ([string]$ConfigFile) {
         Write-Host "An empty configuration file has been created at '${ConfigFile}'. Edit the file before running this script again."
         exit 1
     }
+}
+
+# Write log messages with a timestamp
+function Write-Log ([string]$Message) {
+    Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
+    Write-Host $Message
+}
+
+# Checks whether a backup is enabled and should run based on the configuration.
+function Test-BackupEnabled ([hashtable]$config) {
+    if ($config.Enabled) {
+        if ($config.OnlyRunOn) {
+            return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
+        }
+        return $true
+    }
+    return $false
 }
 
 # Recursively expand environment variables
