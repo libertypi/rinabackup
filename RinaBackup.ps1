@@ -223,6 +223,7 @@ function Backup-OneDrive ([hashtable]$config) {
     }
     # Perform mirror copy with robocopy.
     robocopy $config.Source $config.Destination /MIR /DCOPY:DAT /J /COMPRESS /R:3 /MT /XA:S
+    Write-Log "Robocopy finished backing up OneDrive with exit code ${LASTEXITCODE}."
     # Apply unpinning to source path.
     if ($config.AutoUnpin) {
         Set-UnpinIfNotPinned -Path $config.Source
