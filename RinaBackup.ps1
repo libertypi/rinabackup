@@ -31,6 +31,17 @@
 #                                                                                                        #
 ##########################################################################################################
 
+$LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
+$RoboCode = @{
+    0 = 'No files were copied. No failure was encountered. No files were mismatched.'
+    1 = 'All files were copied successfully.'
+    2 = 'Additional files in the destination directory. No files were copied.'
+    3 = 'Some files were copied. Additional files were present. No failure was encountered.'
+    5 = 'Some files were copied. Some files were mismatched. No failure was encountered.'
+    6 = 'Additional files and mismatched files exist. No files were copied and no failures were encountered.'
+    7 = 'Files were copied, a file mismatch was present, and additional files were present.'
+    8 = "Several files didn't copy."
+}
 
 function Read-Configuration ([string]$ConfigFile) {
     try {
@@ -216,14 +227,14 @@ function Test-ProcessPath ([string[]]$Path) {
 function Backup-OneDrive ([hashtable]$config) {
     $config = Expand-EnvironmentVariables $config
     foreach ($d in $config.Source, $config.Destination) {
-        if (-not $(try { Test-Path -LiteralPath $d.Trim() -PathType Container } catch { $false })) {
+        if (-not $(try { Test-Path -LiteralPath $d -PathType Container } catch { $false })) {
             Write-Log "Skipping OneDrive backup: '${d}' is unreachable."
             return
         }
     }
     # Perform mirror copy with robocopy.
     robocopy $config.Source $config.Destination /MIR /DCOPY:DAT /J /COMPRESS /R:3 /MT /XA:S
-    Write-Log "Robocopy finished backing up OneDrive with exit code ${LASTEXITCODE}."
+    Write-Log "Robocopy finished backing up OneDrive with exit code ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))"
     # Apply unpinning to source path.
     if ($config.AutoUnpin) {
         Set-UnpinIfNotPinned -Path $config.Source
@@ -308,11 +319,10 @@ function Backup-VMWare ([hashtable]$config) {
     }
     # Mirror the directory using robocopy
     robocopy $config.Source $config.Destination /MIR /DCOPY:DAT /J /COMPRESS /R:3 /XF '*.log' '*.scoreboard' /XD 'caches' $exclusion
-    Write-Log "Robocopy finished backing up VMs with exit code ${LASTEXITCODE}."
+    Write-Log "Robocopy finished backing up VMs with exit code ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))"
 }
 
 # Import Configuration
-$LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
 $Configuration = Read-Configuration (Join-Path $PSScriptRoot "Config_${env:COMPUTERNAME}.psd1")
 
 # Execute Archiving
