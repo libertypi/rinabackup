@@ -33,17 +33,22 @@
 
 $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
 $RoboCode = @{
-    0 = 'No files were copied. No failure was encountered. No files were mismatched.'
-    1 = 'All files were copied successfully.'
-    2 = 'Additional files in the destination directory. No files were copied.'
-    3 = 'Some files were copied. Additional files were present. No failure was encountered.'
-    5 = 'Some files were copied. Some files were mismatched. No failure was encountered.'
-    6 = 'Additional files and mismatched files exist. No files were copied and no failures were encountered.'
-    7 = 'Files were copied, a file mismatch was present, and additional files were present.'
-    8 = "Several files didn't copy."
+    0 = 'No files copied or mismatched. No failure.'
+    1 = 'All files copied.'
+    2 = 'Extra files in destination. No copy.'
+    3 = 'Some files copied. Extra files. No failure.'
+    5 = 'Some files copied or mismatched. No failure.'
+    6 = 'Extra and mismatched files. No copy or failure.'
+    7 = 'Files copied with mismatches and extras.'
+    8 = 'Some files not copied.'
 }
 
-function Read-Configuration ([string]$ConfigFile) {
+function Read-Configuration {
+    param (
+        [parameter(Mandatory = $true)]
+        [string]$ConfigFile
+    )
+
     try {
         return Import-PowerShellDataFile -LiteralPath $ConfigFile -ErrorAction Stop
     }
@@ -115,13 +120,28 @@ function Read-Configuration ([string]$ConfigFile) {
 }
 
 # Write log messages with a timestamp
-function Write-Log ([string]$Message) {
-    Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
+function Write-Log {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')]
+        [string]$Level = 'INFO'
+    )
+
+    $Message = "${Level}: ${Message}"
     Write-Host $Message
+    Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
 }
 
 # Checks whether a backup is enabled and should run based on the configuration.
-function Test-BackupEnabled ([hashtable]$config) {
+function Test-BackupEnabled {
+    param (
+        [parameter(Mandatory = $true)]
+        [hashtable]$config
+    )
+
     if ($config.Enabled) {
         if ($config.OnlyRunOn) {
             return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
@@ -151,11 +171,16 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
 }
 
 # Compress archive using 7-Zip
-function Update-Archive ([hashtable]$config) {
+function Update-Archive {
+    param (
+        [parameter(Mandatory = $true)]
+        [hashtable]$config
+    )
+
     $config = Expand-EnvironmentVariables $config
     # Check for running processes in source directories
     if ($config.CheckProc -and (Test-ProcessPath -Path $config.Sources)) {
-        Write-Log 'Skipping archiving: running processes in source directories.'
+        Write-Log 'Skipping archiving: running processes in source directories.' -Level WARNING
         return
     }
     # Define common switches for the 7-Zip command
@@ -171,7 +196,7 @@ function Update-Archive ([hashtable]$config) {
             [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
         }
         catch {
-            Write-Log "Skipping archiving: password decryption failure. $($_.Exception.Message)"
+            Write-Log "Skipping archiving: password decryption failure. $($_.Exception.Message)" -Level ERROR
             return
         }
     }
@@ -179,12 +204,17 @@ function Update-Archive ([hashtable]$config) {
     foreach ($s in $config.Exclusion) { $switches.Add("-xr!${s}") }
     # Execute 7-Zip with the defined switches and paths
     & $config.Executable $switches -- $config.Destination $config.Sources
-    Write-Log "7-Zip finished with exit code ${LASTEXITCODE}."
+    Write-Log "7-Zip finished with exit code ${LASTEXITCODE}." -Level INFO
 }
 
 # Tests if any running process paths match or are contained within a given set
 # of paths. Constructs a trie structure and checks the paths against the trie.
-function Test-ProcessPath ([string[]]$Path) {
+function Test-ProcessPath {
+    param (
+        [parameter(Mandatory = $true)]
+        [string[]]$Path
+    )
+
     $sep = [IO.Path]::DirectorySeparatorChar
     $trie = @{}
     # Build trie
@@ -224,17 +254,22 @@ function Test-ProcessPath ([string[]]$Path) {
 }
 
 # Backup OneDrive folder
-function Backup-OneDrive ([hashtable]$config) {
+function Backup-OneDrive {
+    param (
+        [parameter(Mandatory = $true)]
+        [hashtable]$config
+    )
+
     $config = Expand-EnvironmentVariables $config
     foreach ($d in $config.Source, $config.Destination) {
         if (-not $(try { Test-Path -LiteralPath $d -PathType Container } catch { $false })) {
-            Write-Log "Skipping OneDrive backup: '${d}' is unreachable."
+            Write-Log "Skipping OneDrive backup: '${d}' is unreachable." -Level ERROR
             return
         }
     }
     # Perform mirror copy with robocopy.
     robocopy $config.Source $config.Destination /MIR /DCOPY:DAT /J /COMPRESS /R:3 /MT /XA:S
-    Write-Log "Robocopy finished backing up OneDrive with exit code ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))"
+    Write-Log "Robocopy finished backing up OneDrive. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
     # Apply unpinning to source path.
     if ($config.AutoUnpin) {
         Set-UnpinIfNotPinned -Path $config.Source
@@ -264,7 +299,12 @@ function Backup-OneDrive ([hashtable]$config) {
         FILE_ATTRIBUTE_UNPINNED : False
         FILE_ATTRIBUTE_OFFLINE  : False
 #>
-function Set-UnpinIfNotPinned ([string]$Path) {
+function Set-UnpinIfNotPinned {
+    param (
+        [parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
     $PINNED = 0x00080000
     $UNPINNED = 0x00100000
     $COMBINED = $UNPINNED -bor $PINNED
@@ -277,14 +317,19 @@ function Set-UnpinIfNotPinned ([string]$Path) {
 }
 
 # Backup VMWare virtual machines
-function Backup-VMWare ([hashtable]$config) {
+function Backup-VMWare {
+    param (
+        [parameter(Mandatory = $true)]
+        [hashtable]$config
+    )
+
     $config = Expand-EnvironmentVariables $config
     try {
         $rightDirs = @(Get-ChildItem -LiteralPath $config.Destination -Directory -ErrorAction Stop)
         $leftDirs = @(Get-ChildItem -LiteralPath $config.Source -Directory -ErrorAction Stop)
     }
     catch {
-        Write-Log "Skipping VM backup: $($_.Exception.Message)"
+        Write-Log "Skipping VM backup: $($_.Exception.Message)" -Level ERROR
         return
     }
     $exclusion = [System.Collections.Generic.List[string]]::new()
@@ -298,7 +343,7 @@ function Backup-VMWare ([hashtable]$config) {
             foreach ($file in Get-ChildItem -LiteralPath $dir.FullName) {
                 if ($exts.Contains($file.Extension)) {
                     $exclusion.Add($dir.FullName)
-                    Write-Log "Skipping '$($dir.Name)': VM not in a shutdown state."
+                    Write-Log "Skipping '$($dir.Name)': VM not in a shutdown state." -Level WARNING
                     break
                 }
             }
@@ -319,7 +364,7 @@ function Backup-VMWare ([hashtable]$config) {
     }
     # Mirror the directory using robocopy
     robocopy $config.Source $config.Destination /MIR /DCOPY:DAT /J /COMPRESS /R:3 /XF '*.log' '*.scoreboard' /XD 'caches' $exclusion
-    Write-Log "Robocopy finished backing up VMs with exit code ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))"
+    Write-Log "Robocopy finished backing up VMs. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
 }
 
 # Import Configuration
