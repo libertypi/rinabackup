@@ -156,14 +156,14 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
     if ($InputObject -is [string]) {
         return [System.Environment]::ExpandEnvironmentVariables($InputObject)
     }
-    elseif ($InputObject -is [hashtable]) {
-        foreach ($i in @($InputObject.Keys)) {
-            $InputObject[$i] = Expand-EnvironmentVariables $InputObject[$i]
-        }
-    }
     elseif ($InputObject -is [array]) {
         $n = $InputObject.Length
         for ($i = 0; $i -lt $n; $i++) {
+            $InputObject[$i] = Expand-EnvironmentVariables $InputObject[$i]
+        }
+    }
+    elseif ($InputObject -is [hashtable]) {
+        foreach ($i in @($InputObject.Keys)) {
             $InputObject[$i] = Expand-EnvironmentVariables $InputObject[$i]
         }
     }
@@ -177,7 +177,9 @@ function Update-Archive {
         [hashtable]$config
     )
 
+    if (-not (Test-BackupEnabled $config)) { return }
     $config = Expand-EnvironmentVariables $config
+
     # Check for running processes in source directories
     if ($config.CheckProc -and (Test-ProcessPath -Path $config.Sources)) {
         Write-Log 'Skipping archiving: running processes in source directories.' -Level WARNING
@@ -260,7 +262,9 @@ function Backup-OneDrive {
         [hashtable]$config
     )
 
+    if (-not (Test-BackupEnabled $config)) { return }
     $config = Expand-EnvironmentVariables $config
+
     foreach ($d in $config.Source, $config.Destination) {
         if (-not $(try { Test-Path -LiteralPath $d -PathType Container } catch { $false })) {
             Write-Log "Skipping OneDrive backup: '${d}' is unreachable." -Level ERROR
@@ -323,7 +327,9 @@ function Backup-VMWare {
         [hashtable]$config
     )
 
+    if (-not (Test-BackupEnabled $config)) { return }
     $config = Expand-EnvironmentVariables $config
+
     try {
         $rightDirs = @(Get-ChildItem -LiteralPath $config.Destination -Directory -ErrorAction Stop)
         $leftDirs = @(Get-ChildItem -LiteralPath $config.Source -Directory -ErrorAction Stop)
@@ -370,17 +376,7 @@ function Backup-VMWare {
 # Import Configuration
 $Configuration = Read-Configuration (Join-Path $PSScriptRoot "Config_${env:COMPUTERNAME}.psd1")
 
-# Execute Archiving
-if (Test-BackupEnabled -config $Configuration.Archive) {
-    Update-Archive -config $Configuration.Archive
-}
-
-# Execute OneDrive Backup
-if (Test-BackupEnabled -config $Configuration.OneDrive) {
-    Backup-OneDrive -config $Configuration.OneDrive
-}
-
-# Execute VMWare Backup
-if (Test-BackupEnabled -config $Configuration.VMWare) {
-    Backup-VMWare -config $Configuration.VMWare
-}
+# Execute Backups
+Update-Archive $Configuration.Archive
+Backup-OneDrive $Configuration.OneDrive
+Backup-VMWare $Configuration.VMWare
