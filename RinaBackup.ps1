@@ -136,12 +136,7 @@ function Write-Log {
 }
 
 # Checks whether a backup is enabled and should run based on the configuration.
-function Test-BackupEnabled {
-    param (
-        [parameter(Mandatory = $true)]
-        [hashtable]$config
-    )
-
+function Test-BackupEnabled([hashtable]$config) {
     if ($config.Enabled) {
         if ($config.OnlyRunOn) {
             return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
