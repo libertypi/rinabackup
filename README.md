@@ -2,7 +2,7 @@
 
 RinaBackup is an automated backup script tailored for my personal use, featuring:
 
-- Updating multiple folders into an encrypted 7-Zip archive. The script checks for running processes before archiving and securely stores the password.
+- Updating multiple folders into an encrypted 7-Zip archive, skips if running processes are found in the source, and securely stores the password.
 - Backs up the OneDrive folder, freeing up local space after backup, except for files marked as "always keep on this device."
 - Backs up VMware virtual machines to another location, skipping running VMs.
 
