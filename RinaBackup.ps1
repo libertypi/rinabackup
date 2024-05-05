@@ -77,7 +77,12 @@ function Write-Log {
 }
 
 # Checks whether a backup is enabled and should run based on the configuration.
-function Test-BackupEnabled([hashtable]$config) {
+function Test-BackupEnabled {
+    param (
+        [parameter(Mandatory = $true)]
+        [hashtable]$config
+    )
+
     if ($config.Enabled) {
         if ($config.OnlyRunOn) {
             return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
@@ -114,18 +119,31 @@ function Test-ProcessPath {
         [string[]]$Path
     )
 
+    $Path = (Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue).Path
+    if (-not $Path) { return $false }
+    $Proc = Get-Process | Select-Object -ExpandProperty Path -Unique
+
+    # Single path optimization
+    if ($Path.Count -eq 1) {
+        $p = $Path[0]
+        # Path is a file
+        if (Test-Path -LiteralPath $p -PathType Leaf) {
+            return $Proc.Contains($p)
+        }
+        # Add trailing slash to directory
+        $p = Join-Path $p ''
+        foreach ($s in $Proc) {
+            if ($s.StartsWith($p)) { return $true }
+        }
+        return $false
+    }
+
+    # Build trie for multiple paths
     $sep = [IO.Path]::DirectorySeparatorChar
     $trie = @{}
-    # Build trie
     foreach ($p in $Path) {
-        try {
-            $p = Resolve-Path -LiteralPath $p -ErrorAction Stop
-        }
-        catch {
-            continue
-        }
         $node = $trie
-        foreach ($s in $p.Path.Split($sep)) {
+        foreach ($s in $p.Split($sep)) {
             if (-not $s) { continue }
             if (-not $node.ContainsKey($s)) {
                 $node[$s] = @{}
@@ -136,13 +154,11 @@ function Test-ProcessPath {
         $node[$sep] = $true
     }
     # Check process paths against trie
-    foreach ($p in (Get-Process | Select-Object -ExpandProperty Path -Unique)) {
+    foreach ($p in $Proc) {
         $node = $trie
         foreach ($s in $p.Split($sep)) {
             if (-not $s) { continue }
-            if (-not $node.ContainsKey($s)) {
-                break
-            }
+            if (-not $node.ContainsKey($s)) { break }
             $node = $node[$s]
             if ($node.ContainsKey($sep)) {
                 return $true
@@ -152,8 +168,8 @@ function Test-ProcessPath {
     return $false
 }
 
-# Validates accessibility of source directory and creates destination directory
-# if it does not exist. Return source and destination as strings.
+# Validates accessibility of source and destination directories. Returns them as
+# strings.
 function Test-SrcAndDst {
     param (
         [parameter(Mandatory = $true)]
@@ -162,17 +178,13 @@ function Test-SrcAndDst {
         [parameter(Mandatory = $true)]
         [string]$Destination
     )
-    if (-not ($Source -and $Destination)) {
-        throw 'Path value cannot be empty or null.'
-    }
     if ($Source -eq $Destination) {
-        throw 'Source cannot be the same as Destination.'
+        throw 'Source cannot be the same as Destination'
     }
-    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
-        throw "$Source is unreachable or not a directory."
-    }
-    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
-        New-Item -ItemType Directory -Path $Destination -ErrorAction Stop
+    foreach ($d in $Source, $Destination) {
+        if (-not (Test-Path -LiteralPath $d -PathType Container -ErrorAction Stop)) {
+            throw "'${d}' does not exist or is not a directory"
+        }
     }
     return $Source, $Destination
 }
@@ -191,11 +203,16 @@ function Update-Archive {
     [string]$exe = $config.Executable
 
     # Check for accessibility of source files and 7zip executable
-    foreach ($f in ($srcs + $exe)) {
-        if (-not ($f -and (Test-Path -LiteralPath $f))) {
-            Write-Log "Skipping archiving: ${f} is not accessible." -Level ERROR
-            return
+    try {
+        foreach ($f in ($srcs + $exe)) {
+            if (-not (Test-Path -LiteralPath $f -ErrorAction Stop)) {
+                throw "'${f}' does not exist"
+            }
         }
+    }
+    catch {
+        Write-Log "Skipping archiving: $($_.Exception.Message)." -Level ERROR
+        return
     }
     # Check for running processes in source directories
     if ($config.CheckProc -and (Test-ProcessPath -Path $srcs)) {
@@ -215,7 +232,7 @@ function Update-Archive {
             [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
         }
         catch {
-            Write-Log "Skipping archiving: password decryption failure. $($_.Exception.Message)" -Level ERROR
+            Write-Log "Skipping archiving: password decryption failure. $($_.Exception.Message)." -Level ERROR
             return
         }
     }
@@ -223,7 +240,7 @@ function Update-Archive {
     foreach ($s in $config.Exclusion) { $switches.Add("-xr!${s}") }
     # Execute 7-Zip with the defined switches and paths
     & $exe $switches -- $dst $srcs
-    Write-log "Archiving finished. Dst: '${dst}'. Exit code: ${LASTEXITCODE}. Size: $((Get-Item -LiteralPath $dst).Length)." -Level INFO
+    Write-log "Archiving finished. Destination: '${dst}'. Exit code: ${LASTEXITCODE}. Size: $((Get-Item -LiteralPath $dst).Length)." -Level INFO
 }
 
 # Backup general directories
@@ -242,17 +259,17 @@ function Backup-Directory {
             $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
         }
         catch {
-            Write-Log "Skipping '$($config.Source)': $($_.Exception.Message)" -Level ERROR
+            Write-Log "Skipping backup: $($_.Exception.Message). Source: '$($config.Source)'. Destination: '$($config.Destination)'." -Level ERROR
             continue
         }
         # Check for running processes
         if ($config.CheckProc -and (Test-ProcessPath -Path $src)) {
-            Write-Log "Skipping '${src}': running processes in directory." -Level WARNING
+            Write-Log "Skipping backup: running processes in source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
             continue
         }
         # Perform mirror copy with robocopy.
         robocopy $src $dst $RoboParams $config.RoboArgs
-        Write-Log "Directory backup finished. Src: '${src}'. Dst: '${dst}'. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
+        Write-Log "Directory backup finished. Source: '${src}'. Destination: '${dst}'. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
     }
 }
 
@@ -271,12 +288,12 @@ function Backup-OneDrive {
         $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
     }
     catch {
-        Write-Log "Skipping OneDrive backup: $($_.Exception.Message)" -Level ERROR
+        Write-Log "Skipping backup: $($_.Exception.Message). Source: '$($config.Source)'. Destination: '$($config.Destination)'." -Level ERROR
         return
     }
     # Perform mirror copy with robocopy.
     robocopy $src $dst $RoboParams /XA:S
-    Write-Log "OneDrive backup finished. Src: '${src}'. Dst: '${dst}'. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
+    Write-Log "OneDrive backup finished. Source: '${src}'. Destination: '${dst}'. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
     # Apply unpinning to source path.
     if ($config.AutoUnpin) {
         Set-UnpinIfNotPinned -Path $src
@@ -340,7 +357,7 @@ function Backup-VMWare {
         $rightDirs = @(Get-ChildItem -LiteralPath $dst -Directory -ErrorAction Stop)
     }
     catch {
-        Write-Log "Skipping VMWare backup: $($_.Exception.Message)" -Level ERROR
+        Write-Log "Skipping VMWare backup: $($_.Exception.Message). Source: '$($config.Source)'. Destination: '$($config.Destination)'." -Level ERROR
         return
     }
     # Exclude running VMs in the source.
@@ -354,7 +371,7 @@ function Backup-VMWare {
             foreach ($file in Get-ChildItem -LiteralPath $dir.FullName) {
                 if ($exts.Contains($file.Extension)) {
                     $exclusion.Add($dir.FullName)
-                    Write-Log "Skipping '$($dir.Name)': VM not in a shutdown state." -Level WARNING
+                    Write-Log "Skipping running VM: '$($dir.Name)'." -Level WARNING
                     break
                 }
             }
@@ -375,7 +392,7 @@ function Backup-VMWare {
     }
     # Mirror the directory using robocopy
     robocopy $src $dst $RoboParams /XF '*.log' '*.scoreboard' /XD 'caches' $exclusion
-    Write-Log "VMware backup finished. Src: '${src}'. Dst: '${dst}'. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
+    Write-Log "VMware backup finished. Source: '${src}'. Destination: '${dst}'. Exit code: ${LASTEXITCODE} ($($RoboCode[$LASTEXITCODE]))" -Level INFO
 }
 
 # Import Configuration
