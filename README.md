@@ -1,6 +1,6 @@
 # RinaBackup
 
-RinaBackup is an automated backup script tailored for my personal use, written in PowerShell. It is primarily designed to backup files from PCs and laptops to a centralized storage. After configuration, it is recommended to set the script up to run automatically via Task Scheduler.
+RinaBackup is an automated backup script tailored for my personal use. Written in PowerShell, it is primarily designed to backup files from PCs and laptops to a centralized storage. After configuration, it is recommended to set the script up to run automatically via Task Scheduler.
 
 - Backs up files into 7-Zip archives or directories.
 - Special handling for OneDrive folders and VMware VMs.
@@ -9,7 +9,7 @@ RinaBackup is an automated backup script tailored for my personal use, written i
 
 #### Configuration File
 
-Upon the first run, the script generates a configuration file `Config_%COMPUTERNAME%.psd1` in its directory.
+Upon the first run, the script generates a configuration file `Config_%COMPUTERNAME%.psd1` in its directory. Edit this file for configuration.
 
 ```powershell
 <#
@@ -17,9 +17,9 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
     - Enabled:      Enable or disable the backup section.
     - OnlyRunOn:    Specifies days of the week for backup; an empty value skips the check.
                     Accepts: @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday').
+    - CheckProc:    Skip action if running processes are found in source.
 
-    Archive Options:
-    - CheckProc:    Skip archiving if running processes are found in source.
+    Archives Options:
     - Executable:   Path to the 7-Zip executable.
     - Sources:      Source directories to archive.
     - Destination:  Destination path for the archive.
@@ -49,16 +49,18 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
 #>
 
 @{
-    Archive     = @{
-        Enabled     = $false
-        OnlyRunOn   = @()
-        CheckProc   = $true
-        Executable  = ''
-        Sources     = @()
-        Destination = ''
-        Exclusion   = @()
-        Password    = ''
-    }
+    Archives    = @(
+        @{
+            Enabled     = $false
+            OnlyRunOn   = @()
+            CheckProc   = $true
+            Executable  = ''
+            Sources     = @()
+            Destination = ''
+            Exclusion   = @()
+            Password    = ''
+        }
+    )
     Directories = @(
         @{
             Enabled     = $false
@@ -72,9 +74,10 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
     OneDrive    = @{
         Enabled     = $false
         OnlyRunOn   = @()
-        AutoUnpin   = $false
+        CheckProc   = $false
         Source      = '%OneDrive%'
         Destination = ''
+        AutoUnpin   = $false
     }
     VMWare      = @{
         Enabled     = $false

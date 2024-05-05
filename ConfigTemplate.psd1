@@ -3,9 +3,9 @@
     - Enabled:      Enable or disable the backup section.
     - OnlyRunOn:    Specifies days of the week for backup; an empty value skips the check.
                     Accepts: @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday').
+    - CheckProc:    Skip action if running processes are found in source.
 
-    Archive Options:
-    - CheckProc:    Skip archiving if running processes are found in source.
+    Archives Options:
     - Executable:   Path to the 7-Zip executable.
     - Sources:      Source directories to archive.
     - Destination:  Destination path for the archive.
@@ -35,16 +35,18 @@
 #>
 
 @{
-    Archive     = @{
-        Enabled     = $false
-        OnlyRunOn   = @()
-        CheckProc   = $true
-        Executable  = ''
-        Sources     = @()
-        Destination = ''
-        Exclusion   = @()
-        Password    = ''
-    }
+    Archives    = @(
+        @{
+            Enabled     = $false
+            OnlyRunOn   = @()
+            CheckProc   = $true
+            Executable  = ''
+            Sources     = @()
+            Destination = ''
+            Exclusion   = @()
+            Password    = ''
+        }
+    )
     Directories = @(
         @{
             Enabled     = $false
@@ -58,9 +60,10 @@
     OneDrive    = @{
         Enabled     = $false
         OnlyRunOn   = @()
-        AutoUnpin   = $false
+        CheckProc   = $false
         Source      = '%OneDrive%'
         Destination = ''
+        AutoUnpin   = $false
     }
     VMWare      = @{
         Enabled     = $false
