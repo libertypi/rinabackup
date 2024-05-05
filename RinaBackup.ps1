@@ -107,9 +107,8 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
     return $InputObject
 }
 
-# Tests if any running process paths match or are contained within a given set
-# of paths. Constructs a trie structure and checks the paths against the trie.
-function Test-ProcessPath {
+# Tests if any running processes are located within the specified paths.
+function Test-RunningProcess {
     param (
         [parameter(Mandatory = $true)]
         [string[]]$Path
@@ -201,11 +200,11 @@ function Update-Archive {
             # Check for accessibility of files
             foreach ($s in $srcs + (Split-Path -Parent $dst)) {
                 if (-not (Test-Path -LiteralPath $s -ErrorAction Stop)) {
-                    throw "'${s}' does not exist"
+                    throw "'${s}' does not exist."
                 }
             }
             # Check for running processes in source directories
-            if ($config.CheckProc -and (Test-ProcessPath -Path $srcs)) {
+            if ($config.CheckProc -and (Test-RunningProcess -Path $srcs)) {
                 Write-Log "Skipping archiving: Running processes in source directories. File: '${dst}'." -Level WARNING
                 continue
             }
@@ -246,7 +245,7 @@ function Backup-Directory {
             # Check for accessibility
             $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
             # Check for running processes
-            if ($config.CheckProc -and (Test-ProcessPath -Path $src)) {
+            if ($config.CheckProc -and (Test-RunningProcess -Path $src)) {
                 Write-Log "Skipping backup: Running processes in source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
                 continue
             }
@@ -272,7 +271,7 @@ function Backup-OneDrive {
         # Check for accessibility
         $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
         # Check for running processes
-        if ($config.CheckProc -and (Test-ProcessPath -Path $src)) {
+        if ($config.CheckProc -and (Test-RunningProcess -Path $src)) {
             Write-Log "Skipping backup: Running processes in source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
             return
         }
@@ -338,7 +337,6 @@ function Backup-VMWare {
 
     if (-not (Test-BackupEnabled $config)) { return }
     $config = Expand-EnvironmentVariables $config
-
     try {
         # Check for accessibility
         $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
