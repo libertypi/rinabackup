@@ -32,7 +32,7 @@
 ##########################################################################################################
 
 $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
-$RoboParams = @('/MIR', '/J', '/MT', '/DCOPY:DAT', '/R:3')
+$RoboParams = @('/MIR', '/J', '/DCOPY:DAT', '/R:3')
 $RoboCode = @{
     0 = 'No files copied or mismatched. No failure.'
     1 = 'All files copied.'
@@ -72,20 +72,23 @@ function Write-Log {
     Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
 }
 
-# Checks whether a backup is enabled and should run based on the configuration.
-function Test-BackupEnabled {
+# Check whether a backup task is enabled and meets the running conditions.
+function Test-TaskCondition {
     param (
         [parameter(Mandatory = $true)]
-        [hashtable]$config
+        [hashtable]$Config
     )
 
-    if ($config.Enabled) {
-        if ($config.OnlyRunOn) {
-            return ($config.OnlyRunOn -contains (Get-Date).DayOfWeek.ToString())
-        }
-        return $true
+    if (-not $Config.Enable) {
+        return $false
     }
-    return $false
+    if ($Config.DaysOfWeek -and (Get-Date).DayOfWeek.ToString() -notin $Config.DaysOfWeek) {
+        return $false
+    }
+    if ($Config.NetworkName -and $Config.NetworkName -notin (Get-NetConnectionProfile).Name) {
+        return $false
+    }
+    return $true
 }
 
 # Recursively expand environment variables
@@ -192,7 +195,7 @@ function Update-Archive {
     )
 
     foreach ($config in $Configs) {
-        if (-not (Test-BackupEnabled $config)) { continue }
+        if (-not (Test-TaskCondition $config)) { continue }
         $config = Expand-EnvironmentVariables $config
         [string[]]$srcs = $config.Sources
         [string]$dst = $config.Destination
@@ -205,7 +208,7 @@ function Update-Archive {
             }
             # Check for running processes in source directories
             if ($config.CheckProc -and (Test-RunningProcess -Path $srcs)) {
-                Write-Log "Skipping archiving: Running processes in source directories. File: '${dst}'." -Level WARNING
+                Write-Log "Skipping archiving: Running processes in source directories. Destination: '${dst}'." -Level WARNING
                 continue
             }
             # Define common switches for the 7-Zip command
@@ -223,10 +226,10 @@ function Update-Archive {
             foreach ($s in $config.Exclusion) { $switches.Add("-xr!${s}") }
             # Execute 7-Zip with the defined switches and paths
             & $config.Executable $switches -- $dst $srcs
-            Write-log "Archiving finished with exit code ${LASTEXITCODE}. File: '${dst}'. Size: $((Get-Item -LiteralPath $dst).Length)." -Level INFO
+            Write-log "Archiving finished with exit code ${LASTEXITCODE}. Destination: '${dst}'. Size: $((Get-Item -LiteralPath $dst).Length)." -Level INFO
         }
         catch {
-            Write-Log "Archiving failed. File: '${dst}'. $($_.Exception.Message)" -Level ERROR
+            Write-Log "Archiving failed. Destination: '${dst}'. $($_.Exception.Message)" -Level ERROR
         }
     }
 }
@@ -239,7 +242,7 @@ function Backup-Directory {
     )
 
     foreach ($config in $Configs) {
-        if (-not (Test-BackupEnabled $config)) { continue }
+        if (-not (Test-TaskCondition $config)) { continue }
         $config = Expand-EnvironmentVariables $config
         try {
             # Check for accessibility
@@ -265,7 +268,7 @@ function Backup-OneDrive {
         [hashtable]$config
     )
 
-    if (-not (Test-BackupEnabled $config)) { return }
+    if (-not (Test-TaskCondition $config)) { return }
     $config = Expand-EnvironmentVariables $config
     try {
         # Check for accessibility
@@ -275,7 +278,7 @@ function Backup-OneDrive {
             Write-Log "Skipping backup: Running processes in source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
             return
         }
-        robocopy $src $dst $RoboParams /XA:S
+        robocopy $src $dst $RoboParams /MT /XA:S
         Write-Log "OneDrive backup finished with exit code ${LASTEXITCODE}. ($($RoboCode[$LASTEXITCODE])) Source: '${src}'. Destination: '${dst}'." -Level INFO
     }
     catch {
@@ -335,7 +338,7 @@ function Backup-VMWare {
         [hashtable]$config
     )
 
-    if (-not (Test-BackupEnabled $config)) { return }
+    if (-not (Test-TaskCondition $config)) { return }
     $config = Expand-EnvironmentVariables $config
     try {
         # Check for accessibility

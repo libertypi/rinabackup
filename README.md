@@ -5,18 +5,20 @@ RinaBackup is an automated backup script tailored for my personal use. Written i
 - Backs up files into 7-Zip archives or directories.
 - Special handling for OneDrive folders and VMware VMs.
 - Comprehensive and configurable backup controls.
-- Employs 7-Zip and Robocopy for efficient backup tasks.
+- Employs 7-Zip and Robocopy for efficient tasks.
 
 #### Configuration File
 
-Upon the first run, the script generates a configuration file `Config_%COMPUTERNAME%.psd1` in its directory. Edit this file for configuration.
+Upon the first run, the script generates a configuration file `Config_%COMPUTERNAME%.psd1` in its directory. Edit the file before running this script again.
 
 ```powershell
 <#
     Common Options:
-    - Enabled:      Enable or disable the backup section.
-    - OnlyRunOn:    Specifies days of the week for backup; an empty value skips the check.
+    - Enable:       Enable or disable the backup section.
+    - DaysOfWeek:   Specifies days of the week for backup; an empty value skips the check.
                     Accepts: @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday').
+    - NetworkName:  Run only if connected to the specific network; an empty value skips the check.
+                    Get network name with cmdlet: `Get-NetConnectionProfile`
     - CheckProc:    Skip action if running processes are found in source.
 
     Archives Options:
@@ -51,8 +53,9 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
 @{
     Archives    = @(
         @{
-            Enabled     = $false
-            OnlyRunOn   = @()
+            Enable      = $false
+            DaysOfWeek  = @()
+            NetworkName = ''
             CheckProc   = $true
             Executable  = ''
             Sources     = @()
@@ -63,8 +66,9 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
     )
     Directories = @(
         @{
-            Enabled     = $false
-            OnlyRunOn   = @()
+            Enable      = $false
+            DaysOfWeek  = @()
+            NetworkName = ''
             CheckProc   = $false
             Source      = ''
             Destination = ''
@@ -72,16 +76,18 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
         }
     )
     OneDrive    = @{
-        Enabled     = $false
-        OnlyRunOn   = @()
+        Enable      = $false
+        DaysOfWeek  = @()
+        NetworkName = ''
         CheckProc   = $false
         Source      = '%OneDrive%'
         Destination = ''
         AutoUnpin   = $false
     }
     VMWare      = @{
-        Enabled     = $false
-        OnlyRunOn   = @()
+        Enable      = $false
+        DaysOfWeek  = @()
+        NetworkName = ''
         SkipRunning = $true
         KeepExtra   = $true
         Source      = ''

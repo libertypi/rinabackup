@@ -1,8 +1,10 @@
 <#
     Common Options:
-    - Enabled:      Enable or disable the backup section.
-    - OnlyRunOn:    Specifies days of the week for backup; an empty value skips the check.
+    - Enable:       Enable or disable the backup section.
+    - DaysOfWeek:   Specifies days of the week for backup; an empty value skips the check.
                     Accepts: @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday').
+    - NetworkName:  Run only if connected to the specific network; an empty value skips the check.
+                    Get network name with cmdlet: `Get-NetConnectionProfile`
     - CheckProc:    Skip action if running processes are found in source.
 
     Archives Options:
@@ -37,8 +39,9 @@
 @{
     Archives    = @(
         @{
-            Enabled     = $false
-            OnlyRunOn   = @()
+            Enable      = $false
+            DaysOfWeek  = @()
+            NetworkName = ''
             CheckProc   = $true
             Executable  = ''
             Sources     = @()
@@ -49,8 +52,9 @@
     )
     Directories = @(
         @{
-            Enabled     = $false
-            OnlyRunOn   = @()
+            Enable      = $false
+            DaysOfWeek  = @()
+            NetworkName = ''
             CheckProc   = $false
             Source      = ''
             Destination = ''
@@ -58,16 +62,18 @@
         }
     )
     OneDrive    = @{
-        Enabled     = $false
-        OnlyRunOn   = @()
+        Enable      = $false
+        DaysOfWeek  = @()
+        NetworkName = ''
         CheckProc   = $false
         Source      = '%OneDrive%'
         Destination = ''
         AutoUnpin   = $false
     }
     VMWare      = @{
-        Enabled     = $false
-        OnlyRunOn   = @()
+        Enable      = $false
+        DaysOfWeek  = @()
+        NetworkName = ''
         SkipRunning = $true
         KeepExtra   = $true
         Source      = ''
