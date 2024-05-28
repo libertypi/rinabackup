@@ -2,10 +2,9 @@
 
 RinaBackup is an automated backup script tailored for my personal use. Written in PowerShell, it is primarily designed to backup files from PCs and laptops to a centralized storage. After configuration, it is recommended to set the script up to run automatically via Task Scheduler.
 
-- Backs up files into 7-Zip archives or directories.
+- Incrementally backs up files into 7-Zip archives or directories.
 - Special handling for OneDrive folders and VMware VMs.
 - Comprehensive and configurable backup controls.
-- Employs 7-Zip and Robocopy for efficient tasks.
 
 #### Configuration File
 
