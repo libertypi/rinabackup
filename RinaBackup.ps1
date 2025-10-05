@@ -63,10 +63,7 @@ function Read-Configuration {
 # Write log messages with a timestamp
 function Write-Log {
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-
-        [Parameter(Mandatory = $false)]
+        [Parameter(Mandatory)][string]$Message,
         [ValidateSet('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')]
         [string]$Level = 'INFO'
     )
@@ -76,7 +73,7 @@ function Write-Log {
     Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
 }
 
-# Check whether a backup task is enabled and meets the running conditions.
+# Checks whether a backup task is enabled and meets the conditions to run.
 function Test-TaskCondition {
     param (
         [parameter(Mandatory = $true)]
@@ -169,11 +166,8 @@ function Test-RunningProcess {
 # strings.
 function Test-SrcAndDst {
     param (
-        [parameter(Mandatory = $true)]
-        [string]$Source,
-
-        [parameter(Mandatory = $true)]
-        [string]$Destination
+        [parameter(Mandatory)][string]$Source,
+        [parameter(Mandatory)][string]$Destination
     )
     if ($Source -eq $Destination) {
         throw 'Source cannot be the same as Destination.'
@@ -201,11 +195,12 @@ function Test-PathModifiedSince {
     foreach ($p in $Path) {
         try { $p = Get-Item -LiteralPath $p -ErrorAction Stop } catch { continue }
         if ($p.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
-
         if (-not $p.PSIsContainer) { continue }
-        foreach ($f in Get-ChildItem -LiteralPath $p.FullName -Recurse `
-                -Attributes !ReparsePoint -ErrorAction SilentlyContinue) {
-            if ($f.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
+
+        if (Get-ChildItem -LiteralPath $p.FullName -Recurse -Attributes !ReparsePoint -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTimeUtc -gt $refTimeUtc } |
+            Select-Object -First 1) {
+            return $true
         }
     }
     return $false
@@ -214,16 +209,15 @@ function Test-PathModifiedSince {
 # Update archives using 7-Zip
 function Update-Archive {
     param (
-        [parameter(Mandatory = $true)]
-        [hashtable[]]$Configs
+        [parameter(Mandatory)][hashtable[]]$Configs
     )
 
-    foreach ($config in $Configs) {
-        if (-not (Test-TaskCondition $config)) { continue }
-        $config = Expand-EnvironmentVariables $config
+    foreach ($Config in $Configs) {
+        if (-not (Test-TaskCondition $Config)) { continue }
+        $Config = Expand-EnvironmentVariables $Config
 
-        [string[]]$srcs = $config.Sources
-        [string]$dst = $config.Destination
+        [string[]]$srcs = $Config.Sources
+        [string]$dst = $Config.Destination
 
         try {
             # Ensure each source currently exists.
@@ -238,27 +232,27 @@ function Update-Archive {
             }
 
             # Optional: block if processes are using sources
-            if ($config.CheckProc -and (Test-RunningProcess -Path $srcs)) {
+            if ($Config.CheckProc -and (Test-RunningProcess -Path $srcs)) {
                 Write-Log "Skipping archiving: running processes in source directories. Destination: '$dst'." -Level WARNING
                 continue
             }
 
             # Build switch list
             $switches = [System.Collections.Generic.List[string]]@('u', '-up0q0r2x2y2z1w2', '-t7z')
-            $switches.AddRange([string[]]$config.Parameters)
+            $switches.AddRange([string[]]$Config.Parameters)
 
             # Only archive if source files are newer than the destination archive
-            if ($config.OnlyIfNewer) {
+            if ($Config.OnlyIfNewer) {
                 if (-not (Test-PathModifiedSince -Path $srcs -RefFile $dst)) {
-                    Write-Log "Skipping archiving: no newer source file. Destination: '$dst'." -Level WARNING
+                    Write-Log "Skipping archiving: no newer source files. Destination: '$dst'." -Level WARNING
                     continue
                 }
                 $switches.Add('-stl')
             }
 
             # Password
-            if (-not [string]::IsNullOrEmpty($config.Password)) {
-                $s = ConvertTo-SecureString -String $config.Password -ErrorAction Stop
+            if (-not [string]::IsNullOrEmpty($Config.Password)) {
+                $s = ConvertTo-SecureString -String $Config.Password -ErrorAction Stop
                 $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
                 $switches.Add('-mhe=on')
                 $switches.Add("-p$([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR))")
@@ -266,10 +260,10 @@ function Update-Archive {
             }
 
             # Exclusions
-            foreach ($s in @($config.Exclusion)) { if ($s) { $switches.Add("-xr!${s}") } }
+            foreach ($s in @($Config.Exclusion)) { if ($s) { $switches.Add("-xr!${s}") } }
 
             # Execute 7-Zip
-            & $config.SevenZip $switches -- $dst $srcs
+            & $Config.SevenZip $switches -- $dst $srcs
             $code = $LASTEXITCODE
 
             # 0: OK, 1: warning (non-fatal)
@@ -285,26 +279,25 @@ function Update-Archive {
 # Backup general directories
 function Backup-Directory {
     param (
-        [parameter(Mandatory = $true)]
-        [hashtable[]]$Configs
+        [parameter(Mandatory)][hashtable[]]$Configs
     )
 
-    foreach ($config in $Configs) {
-        if (-not (Test-TaskCondition $config)) { continue }
-        $config = Expand-EnvironmentVariables $config
+    foreach ($Config in $Configs) {
+        if (-not (Test-TaskCondition $Config)) { continue }
+        $Config = Expand-EnvironmentVariables $Config
         try {
             # Check for accessibility
-            $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
+            $src, $dst = Test-SrcAndDst -Source $Config.Source -Destination $Config.Destination
             # Check for running processes
-            if ($config.CheckProc -and (Test-RunningProcess -Path $src)) {
-                Write-Log "Skipping backup: Running processes in source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
+            if ($Config.CheckProc -and (Test-RunningProcess -Path $src)) {
+                Write-Log "Skipping backup: running processes in the source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
                 continue
             }
-            robocopy $src $dst $RoboParams $config.RoboArgs
+            robocopy $src $dst $RoboParams $Config.RoboArgs
             Write-Log "Directory backup finished with exit code ${LASTEXITCODE}. ($($RoboCode[$LASTEXITCODE])) Source: '${src}'. Destination: '${dst}'." -Level INFO
         }
         catch {
-            Write-Log "Directory backup failed. Source: '$($config.Source)'. Destination: '$($config.Destination)'. $($_.Exception.Message)" -Level ERROR
+            Write-Log "Directory backup failed. Source: '$($Config.Source)'. Destination: '$($Config.Destination)'. $($_.Exception.Message)" -Level ERROR
         }
     }
 }
@@ -312,29 +305,28 @@ function Backup-Directory {
 # Backup OneDrive folder
 function Backup-OneDrive {
     param (
-        [parameter(Mandatory = $true)]
-        [hashtable]$config
+        [parameter(Mandatory)][hashtable]$Config
     )
 
-    if (-not (Test-TaskCondition $config)) { return }
-    $config = Expand-EnvironmentVariables $config
+    if (-not (Test-TaskCondition $Config)) { return }
+    $Config = Expand-EnvironmentVariables $Config
     try {
         # Check for accessibility
-        $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
+        $src, $dst = Test-SrcAndDst -Source $Config.Source -Destination $Config.Destination
         # Check for running processes
-        if ($config.CheckProc -and (Test-RunningProcess -Path $src)) {
-            Write-Log "Skipping backup: Running processes in source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
+        if ($Config.CheckProc -and (Test-RunningProcess -Path $src)) {
+            Write-Log "Skipping backup: running processes in the source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
             return
         }
         robocopy $src $dst $RoboParams /MT /XA:S
         Write-Log "OneDrive backup finished with exit code ${LASTEXITCODE}. ($($RoboCode[$LASTEXITCODE])) Source: '${src}'. Destination: '${dst}'." -Level INFO
     }
     catch {
-        Write-Log "OneDrive backup failed. Source: '$($config.Source)'. Destination: '$($config.Destination)'. $($_.Exception.Message)" -Level ERROR
+        Write-Log "OneDrive backup failed. Source: '$($Config.Source)'. Destination: '$($Config.Destination)'. $($_.Exception.Message)" -Level ERROR
         return
     }
-    # Apply unpinning to source path.
-    if ($config.AutoUnpin) {
+    # Apply unpinning to the source path.
+    if ($Config.AutoUnpin) {
         Set-UnpinIfNotPinned -Path $src
     }
 }
@@ -364,8 +356,7 @@ function Backup-OneDrive {
 #>
 function Set-UnpinIfNotPinned {
     param (
-        [parameter(Mandatory = $true)]
-        [string]$Path
+        [parameter(Mandatory)][string]$Path
     )
 
     $PINNED = 0x00080000
@@ -379,29 +370,28 @@ function Set-UnpinIfNotPinned {
     }
 }
 
-# Backup VMWare virtual machines
-function Backup-VMWare {
+# Backup VMware virtual machines
+function Backup-VMware {
     param (
-        [parameter(Mandatory = $true)]
-        [hashtable]$config
+        [parameter(Mandatory)][hashtable]$Config
     )
 
-    if (-not (Test-TaskCondition $config)) { return }
-    $config = Expand-EnvironmentVariables $config
+    if (-not (Test-TaskCondition $Config)) { return }
+    $Config = Expand-EnvironmentVariables $Config
     try {
         # Check for accessibility
-        $src, $dst = Test-SrcAndDst -Source $config.Source -Destination $config.Destination
+        $src, $dst = Test-SrcAndDst -Source $Config.Source -Destination $Config.Destination
         $leftDirs = @(Get-ChildItem -LiteralPath $src -Directory -ErrorAction Stop)
         $rightDirs = @(Get-ChildItem -LiteralPath $dst -Directory -ErrorAction Stop)
         # Exclude running VMs in the source.
         $exclusion = [System.Collections.Generic.List[string]]::new()
-        if ($config.SkipRunning) {
+        if ($Config.SkipRunning) {
             $exts = [System.Collections.Generic.HashSet[string]]::new(
                 [string[]]@('.lck', '.vmem', '.vmss'),
                 [System.StringComparer]::OrdinalIgnoreCase
             )
             foreach ($dir in $leftDirs) {
-                foreach ($file in Get-ChildItem -LiteralPath $dir.FullName) {
+                foreach ($file in Get-ChildItem -LiteralPath $dir.FullName -ErrorAction SilentlyContinue) {
                     if ($exts.Contains($file.Extension)) {
                         $exclusion.Add($dir.FullName)
                         Write-Log "Skipping running VM: '$($dir.Name)'." -Level WARNING
@@ -412,7 +402,7 @@ function Backup-VMWare {
         }
         # Keep VMs that only exist in the destination. Excluding dirs on the right
         # prevents them from being removed.
-        if ($config.KeepExtra) {
+        if ($Config.KeepExtra) {
             if ($leftDirs.Count -eq $exclusion.Count) {
                 # Nothing to backup, no need to proceed
                 return
@@ -428,7 +418,7 @@ function Backup-VMWare {
         Write-Log "VMware backup finished with exit code ${LASTEXITCODE}. ($($RoboCode[$LASTEXITCODE])) Source: '${src}'. Destination: '${dst}'." -Level INFO
     }
     catch {
-        Write-Log "VMWare backup failed: Source: '$($config.Source)'. Destination: '$($config.Destination)'. $($_.Exception.Message)" -Level ERROR
+        Write-Log "VMware backup failed: Source: '$($Config.Source)'. Destination: '$($Config.Destination)'. $($_.Exception.Message)" -Level ERROR
     }
 }
 
@@ -439,4 +429,4 @@ $Configuration = Read-Configuration
 Update-Archive $Configuration.Archives
 Backup-Directory $Configuration.Directories
 Backup-OneDrive $Configuration.OneDrive
-Backup-VMWare $Configuration.VMWare
+Backup-VMware $Configuration.VMware

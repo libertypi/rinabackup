@@ -40,11 +40,11 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
     - Source:       Source directory for OneDrive backup.
     - Destination:  Destination path for OneDrive backup.
 
-    VMWare Options:
+    VMware Options:
     - SkipRunning:  Skip running VMs.
     - KeepExtra:    Keep extra VMs in destination not found in source.
-    - Source:       Source directory for VMWare backup.
-    - Destination:  Destination path for VMWare backup.
+    - Source:       Source directory for VMware backup.
+    - Destination:  Destination path for VMware backup.
 
     Notes:
     - Environment variables can be used, enclosed in '%' (e.g. '%USERPROFILE%').
@@ -89,7 +89,7 @@ Upon the first run, the script generates a configuration file `Config_%COMPUTERN
         Destination = ''
         AutoUnpin   = $false
     }
-    VMWare      = @{
+    VMware      = @{
         Enable      = $false
         DaysOfWeek  = @()
         NetworkName = ''
