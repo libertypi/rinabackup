@@ -24,12 +24,16 @@
 #                                                                                                        #
 #                                                                                                        #
 #     Author: David Pi                                                                                   #
-#     Assisted by: ChatGPT - OpenAI                                                                      #
+#     Assisted by: ChatGPT                                                                               #
 #     To Rina                                                                                            #
 #                                                                                                        #
 #     An automated backup script.                                                                        #
 #                                                                                                        #
 ##########################################################################################################
+
+param(
+    [switch]$NoSkipping
+)
 
 $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
 $RoboParams = @('/MIR', '/J', '/DCOPY:DAT', '/R:3')
@@ -78,10 +82,8 @@ function Test-TaskCondition {
         [parameter(Mandatory = $true)]
         [hashtable]$Config
     )
-
-    if (-not $Config.Enable) {
-        return $false
-    }
+    if (-not $Config.Enable) { return $false }
+    if ($NoSkipping) { return $true }
     if ($Config.DaysOfWeek -and (Get-Date).DayOfWeek.ToString() -notin $Config.DaysOfWeek) {
         return $false
     }
@@ -112,10 +114,7 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
 
 # Tests if any running processes are located within the specified paths.
 function Test-RunningProcess {
-    param (
-        [parameter(Mandatory = $true)]
-        [string[]]$Path
-    )
+    param([Parameter(Mandatory)][string[]]$Path)
 
     $Path = (Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue).Path
     if (-not $Path) { return $false }
@@ -180,14 +179,39 @@ function Test-SrcAndDst {
         throw 'Source cannot be the same as Destination.'
     }
     foreach ($d in $Source, $Destination) {
-        if (-not (Test-Path -LiteralPath $d -PathType Container -ErrorAction Stop)) {
+        if (-not (Test-Path -LiteralPath $d -PathType Container)) {
             throw "'${d}' does not exist or is not a directory."
         }
     }
     return $Source, $Destination
 }
 
-# Compress archives using 7-Zip
+function Test-PathModifiedSince {
+    param(
+        [Parameter(Mandatory)][string[]] $Path,
+        [Parameter(Mandatory)][string] $RefFile
+    )
+
+    try {
+        $RefTimeUtc = (Get-Item -LiteralPath $RefFile -ErrorAction Stop).LastWriteTimeUtc
+    }
+    catch {
+        return $true
+    }
+    foreach ($p in $Path) {
+        try { $p = Get-Item -LiteralPath $p -ErrorAction Stop } catch { continue }
+        if ($p.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
+
+        if (-not $p.PSIsContainer) { continue }
+        foreach ($f in Get-ChildItem -LiteralPath $p.FullName -Recurse `
+                -Attributes !ReparsePoint -ErrorAction SilentlyContinue) {
+            if ($f.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
+        }
+    }
+    return $false
+}
+
+# Update archives using 7-Zip
 function Update-Archive {
     param (
         [parameter(Mandatory = $true)]
@@ -197,36 +221,60 @@ function Update-Archive {
     foreach ($config in $Configs) {
         if (-not (Test-TaskCondition $config)) { continue }
         $config = Expand-EnvironmentVariables $config
+
         [string[]]$srcs = $config.Sources
         [string]$dst = $config.Destination
+
         try {
-            # Check for accessibility of files
-            foreach ($s in $srcs + (Split-Path -Parent $dst)) {
-                if (-not (Test-Path -LiteralPath $s -ErrorAction Stop)) {
-                    throw "'${s}' does not exist."
-                }
+            # Ensure each source currently exists.
+            foreach ($s in $srcs) {
+                if (-not (Test-Path -LiteralPath $s)) { throw "'$s' does not exist." }
             }
-            # Check for running processes in source directories
+
+            # Ensure destination directory exists (create it if not)
+            $s = Split-Path -Parent $dst
+            if (-not (Test-Path -LiteralPath $s)) {
+                New-Item -ItemType Directory -Path $s -Force -ErrorAction Stop | Out-Null
+            }
+
+            # Optional: block if processes are using sources
             if ($config.CheckProc -and (Test-RunningProcess -Path $srcs)) {
-                Write-Log "Skipping archiving: Running processes in source directories. Destination: '${dst}'." -Level WARNING
+                Write-Log "Skipping archiving: running processes in source directories. Destination: '$dst'." -Level WARNING
                 continue
             }
-            # Define common switches for the 7-Zip command
-            $switches = [System.Collections.Generic.List[string]]@(
-                'u', '-up0q0r2x2y2z1w2', '-t7z', '-mx=9', '-ms=64m', '-mhe'
-            )
-            # Handle password encryption and add to switches
+
+            # Build switch list
+            $switches = [System.Collections.Generic.List[string]]@('u', '-up0q0r2x2y2z1w2', '-t7z')
+            $switches.AddRange([string[]]$config.Parameters)
+
+            # Only archive if source files are newer than the destination archive
+            if ($config.OnlyIfNewer) {
+                if (-not (Test-PathModifiedSince -Path $srcs -RefFile $dst)) {
+                    Write-Log "Skipping archiving: no newer source file. Destination: '$dst'." -Level WARNING
+                    continue
+                }
+                $switches.Add('-stl')
+            }
+
+            # Password
             if (-not [string]::IsNullOrEmpty($config.Password)) {
-                $string = ConvertTo-SecureString -String $config.Password -ErrorAction Stop
-                $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($string)
+                $s = ConvertTo-SecureString -String $config.Password -ErrorAction Stop
+                $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
+                $switches.Add('-mhe=on')
                 $switches.Add("-p$([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR))")
                 [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
             }
-            # Add exclusion switches
-            foreach ($s in $config.Exclusion) { $switches.Add("-xr!${s}") }
-            # Execute 7-Zip with the defined switches and paths
-            & $config.Executable $switches -- $dst $srcs
-            Write-log "Archiving finished with exit code ${LASTEXITCODE}. Destination: '${dst}'. Size: $((Get-Item -LiteralPath $dst).Length)." -Level INFO
+
+            # Exclusions
+            foreach ($s in @($config.Exclusion)) { if ($s) { $switches.Add("-xr!${s}") } }
+
+            # Execute 7-Zip
+            & $config.SevenZip $switches -- $dst $srcs
+            $code = $LASTEXITCODE
+
+            # 0: OK, 1: warning (non-fatal)
+            if ($code -gt 1) { throw "7-Zip exited with code $code." }
+            Write-Log ("Archiving finished. Exit code {0}. Destination: '{1}'. Size: {2} bytes." -f $code, $dst, (Get-Item -LiteralPath $dst).Length) -Level INFO
         }
         catch {
             Write-Log "Archiving failed. Destination: '${dst}'. $($_.Exception.Message)" -Level ERROR

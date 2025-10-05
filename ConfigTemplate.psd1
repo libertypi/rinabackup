@@ -6,13 +6,16 @@
     - NetworkName:  Run only if connected to the specific network; an empty value skips the check.
                     Get network name with cmdlet: `Get-NetConnectionProfile`
     - CheckProc:    Skip action if running processes are found in source.
+    - OnlyIfNewer:  Scan Sources and run 7-Zip only if any file is newer than the existing archive.
+                    Archive time will be set to latest file time.
 
     Archives Options:
-    - Executable:   Path to the 7-Zip executable.
+    - SevenZip:     Path to the 7-Zip executable.
     - Sources:      Source directories to archive.
     - Destination:  Destination path for the archive.
     - Exclusion:    Patterns to exclude from archiving.
-    - Password:     Password for archive (DPAPI encrypted).
+    - Password:     Password for archive (DPAPI encrypted, see Notes).
+    - Parameters:   Additional parameters passed to 7-Zip, e.g.: @('-mx=9', '-ms=32m')
 
     Directories Options:
     - Source:       Source directory for backup.
@@ -33,7 +36,8 @@
     Notes:
     - Environment variables can be used, enclosed in '%' (e.g. '%USERPROFILE%').
     - Passwords require an encrypted string using the Windows Data Protection API (DPAPI).
-      They can be created with the following command: `Read-Host -AsSecureString | ConvertFrom-SecureString`
+      They can be created with the following command:
+        Read-Host -AsSecureString | ConvertFrom-SecureString
 #>
 
 @{
@@ -43,11 +47,13 @@
             DaysOfWeek  = @()
             NetworkName = ''
             CheckProc   = $true
-            Executable  = ''
+            OnlyIfNewer = $false
+            SevenZip    = ''
             Sources     = @()
             Destination = ''
             Exclusion   = @()
             Password    = ''
+            Parameters  = @()
         }
     )
     Directories = @(
