@@ -72,6 +72,22 @@ function Write-Log {
     Write-Host $Message
     Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
 }
+function Convert-HumanSize {
+    param(
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
+        [long] $Bytes
+    )
+    begin {
+        $units = @('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB')
+    }
+    process {
+        if ($Bytes -eq 0) { return '0.00 B' }
+        $val = [math]::Abs($Bytes)
+        $exp = [math]::Min([math]::Floor([math]::Log($val, 1024)), $units.Count - 1)
+        $val /= [math]::Pow(1024, $exp)
+        [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.00} {1}', [math]::Sign($Bytes) * $val, $units[$exp])
+    }
+}
 
 # Checks whether a backup task is enabled and meets the conditions to run.
 function Test-TaskCondition {
@@ -162,19 +178,24 @@ function Test-RunningProcess {
     return $false
 }
 
-# Validates accessibility of source and destination directories. Returns them as
-# strings.
-function Test-SrcAndDst {
+# Ensure source and destination directories are reachable. Returns them as strings.
+function Test-SrcAndDestDirs {
     param (
-        [parameter(Mandatory)][string]$Source,
-        [parameter(Mandatory)][string]$Destination
+        [parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Source,
+
+        [parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Destination
     )
-    if ($Source -eq $Destination) {
-        throw 'Source cannot be the same as Destination.'
+
+    if ($Source -ieq $Destination) {
+        throw 'Source and Destination cannot be the same.'
     }
     foreach ($d in $Source, $Destination) {
         if (-not (Test-Path -LiteralPath $d -PathType Container)) {
-            throw "'${d}' does not exist or is not a directory."
+            throw "'$d' does not exist or is not a directory."
         }
     }
     return $Source, $Destination
@@ -197,8 +218,8 @@ function Test-PathModifiedSince {
         if ($p.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
         if (-not $p.PSIsContainer) { continue }
 
-        if (Get-ChildItem -LiteralPath $p.FullName -Recurse -Attributes !ReparsePoint -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTimeUtc -gt $refTimeUtc } |
+        if (Get-ChildItem -LiteralPath $p.FullName -Recurse -ErrorAction SilentlyContinue |
+            Where-Object -Property LastWriteTimeUtc -GT $RefTimeUtc |
             Select-Object -First 1) {
             return $true
         }
@@ -220,15 +241,11 @@ function Update-Archive {
         [string]$dst = $Config.Destination
 
         try {
-            # Ensure each source currently exists.
-            foreach ($s in $srcs) {
-                if (-not (Test-Path -LiteralPath $s)) { throw "'$s' does not exist." }
-            }
-
-            # Ensure destination directory exists (create it if not)
-            $s = Split-Path -Parent $dst
-            if (-not (Test-Path -LiteralPath $s)) {
-                New-Item -ItemType Directory -Path $s -Force -ErrorAction Stop | Out-Null
+            # Ensure source and destination are reachable.
+            foreach ($s in $srcs + (Split-Path -Parent $dst)) {
+                if (-not (Test-Path -LiteralPath $s)) {
+                    throw "'${s}' does not exist."
+                }
             }
 
             # Optional: block if processes are using sources
@@ -237,18 +254,16 @@ function Update-Archive {
                 continue
             }
 
+            # Only archive if source files are newer than the destination archive
+            if ($Config.OnlyIfNewer -and -not (Test-PathModifiedSince -Path $srcs -RefFile $dst)) {
+                Write-Log "Skipping archiving: no newer source files. Destination: '$dst'." -Level WARNING
+                continue
+            }
+
             # Build switch list
             $switches = [System.Collections.Generic.List[string]]@('u', '-up0q0r2x2y2z1w2', '-t7z')
             $switches.AddRange([string[]]$Config.Parameters)
-
-            # Only archive if source files are newer than the destination archive
-            if ($Config.OnlyIfNewer) {
-                if (-not (Test-PathModifiedSince -Path $srcs -RefFile $dst)) {
-                    Write-Log "Skipping archiving: no newer source files. Destination: '$dst'." -Level WARNING
-                    continue
-                }
-                $switches.Add('-stl')
-            }
+            if ($Config.OnlyIfNewer) { $switches.Add('-stl') }
 
             # Password
             if (-not [string]::IsNullOrEmpty($Config.Password)) {
@@ -264,11 +279,12 @@ function Update-Archive {
 
             # Execute 7-Zip
             & $Config.SevenZip $switches -- $dst $srcs
-            $code = $LASTEXITCODE
 
             # 0: OK, 1: warning (non-fatal)
+            $code = $LASTEXITCODE
             if ($code -gt 1) { throw "7-Zip exited with code $code." }
-            Write-Log ("Archiving finished. Exit code {0}. Destination: '{1}'. Size: {2} bytes." -f $code, $dst, (Get-Item -LiteralPath $dst).Length) -Level INFO
+            Write-Log ("Archiving finished. Exit code {0}. Destination: '{1}'. Size: {2}." `
+                    -f $code, $dst, (Convert-HumanSize -Bytes (Get-Item -LiteralPath $dst).Length)) -Level INFO
         }
         catch {
             Write-Log "Archiving failed. Destination: '${dst}'. $($_.Exception.Message)" -Level ERROR
@@ -287,7 +303,7 @@ function Backup-Directory {
         $Config = Expand-EnvironmentVariables $Config
         try {
             # Check for accessibility
-            $src, $dst = Test-SrcAndDst -Source $Config.Source -Destination $Config.Destination
+            $src, $dst = Test-SrcAndDestDirs -Source $Config.Source -Destination $Config.Destination
             # Check for running processes
             if ($Config.CheckProc -and (Test-RunningProcess -Path $src)) {
                 Write-Log "Skipping backup: running processes in the source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
@@ -312,7 +328,7 @@ function Backup-OneDrive {
     $Config = Expand-EnvironmentVariables $Config
     try {
         # Check for accessibility
-        $src, $dst = Test-SrcAndDst -Source $Config.Source -Destination $Config.Destination
+        $src, $dst = Test-SrcAndDestDirs -Source $Config.Source -Destination $Config.Destination
         # Check for running processes
         if ($Config.CheckProc -and (Test-RunningProcess -Path $src)) {
             Write-Log "Skipping backup: running processes in the source directory. Source: '${src}'. Destination: '${dst}'." -Level WARNING
@@ -380,7 +396,7 @@ function Backup-VMware {
     $Config = Expand-EnvironmentVariables $Config
     try {
         # Check for accessibility
-        $src, $dst = Test-SrcAndDst -Source $Config.Source -Destination $Config.Destination
+        $src, $dst = Test-SrcAndDestDirs -Source $Config.Source -Destination $Config.Destination
         $leftDirs = @(Get-ChildItem -LiteralPath $src -Directory -ErrorAction Stop)
         $rightDirs = @(Get-ChildItem -LiteralPath $dst -Directory -ErrorAction Stop)
         # Exclude running VMs in the source.
