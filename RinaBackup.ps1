@@ -72,20 +72,26 @@ function Write-Log {
     Write-Host $Message
     Add-Content -LiteralPath $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] ${Message}"
 }
-function Convert-HumanSize {
+function ConvertTo-HumanSize {
     param(
         [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
-        [long] $Bytes
+        [long]$Bytes
     )
     begin {
         $units = @('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB')
     }
     process {
         if ($Bytes -eq 0) { return '0.00 B' }
-        $val = [math]::Abs($Bytes)
-        $exp = [math]::Min([math]::Floor([math]::Log($val, 1024)), $units.Count - 1)
-        $val /= [math]::Pow(1024, $exp)
-        [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.00} {1}', [math]::Sign($Bytes) * $val, $units[$exp])
+        $exp = [math]::Min(
+            [math]::Floor([math]::Log([math]::Abs($Bytes), 1024)),
+            $units.Count - 1
+        )
+        [string]::Format(
+            [Globalization.CultureInfo]::InvariantCulture,
+            '{0:0.00} {1}',
+            $Bytes / [math]::Pow(1024, $exp), 
+            $units[$exp]
+        )
     }
 }
 
@@ -203,8 +209,8 @@ function Test-SrcAndDestDirs {
 
 function Test-PathModifiedSince {
     param(
-        [Parameter(Mandatory)][string[]] $Path,
-        [Parameter(Mandatory)][string] $RefFile
+        [Parameter(Mandatory)][string[]]$Path,
+        [Parameter(Mandatory)][string]$RefFile
     )
 
     try {
@@ -284,7 +290,7 @@ function Update-Archive {
             $code = $LASTEXITCODE
             if ($code -gt 1) { throw "7-Zip exited with code $code." }
             Write-Log ("Archiving finished. Exit code {0}. Destination: '{1}'. Size: {2}." `
-                    -f $code, $dst, (Convert-HumanSize -Bytes (Get-Item -LiteralPath $dst).Length)) -Level INFO
+                    -f $code, $dst, (ConvertTo-HumanSize -Bytes (Get-Item -LiteralPath $dst).Length)) -Level INFO
         }
         catch {
             Write-Log "Archiving failed. Destination: '${dst}'. $($_.Exception.Message)" -Level ERROR
