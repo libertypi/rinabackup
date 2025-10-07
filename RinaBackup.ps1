@@ -38,17 +38,17 @@ param(
 
 $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
 $RoboParams = @('/MIR', '/J', '/DCOPY:DAT', '/R:3')
-$RoboCode = @{
-    0  = 'No changes.'
-    1  = 'Copied successfully.'
-    2  = 'No copy. Extras present.'
-    3  = 'Some files copied. Extras present.'
-    4  = 'Mismatches present.'
-    5  = 'Some files copied. Mismatches present.'
-    6  = 'No copy. Extras and mismatches present.'
-    7  = 'Some files copied. Extras and mismatches present.'
-    8  = 'Failure: some files/dirs not copied.'
-    16 = 'Serious error: nothing copied.'
+
+function Get-RobocopySummary {
+    param([int]$Code)
+    if ($Code -eq 0) { return 'No change.' }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    if ($Code -band 1) { $parts.Add('Copied successfully.') }
+    if ($Code -band 2) { $parts.Add('Extras detected.') }
+    if ($Code -band 4) { $parts.Add('Mismatches detected.') }
+    if ($Code -band 8) { $parts.Add('Some files failed.') }
+    if ($Code -band 16) { $parts.Add('Serious error.') }
+    $parts -join ' '
 }
 
 function Read-Configuration {
@@ -122,7 +122,7 @@ function Test-TaskCondition {
     return $true
 }
 
-# Recursively expand environment variables
+# Recursively expand environment variables.
 function Expand-EnvironmentVariables ([object]$InputObject) {
     if ($InputObject -is [string]) {
         return [System.Environment]::ExpandEnvironmentVariables($InputObject)
@@ -141,60 +141,8 @@ function Expand-EnvironmentVariables ([object]$InputObject) {
     return $InputObject
 }
 
-# Tests if any running processes are located within the specified paths.
-function Test-RunningProcess {
-    param([Parameter(Mandatory)][string[]]$Path)
-
-    $Path = (Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue).Path
-    if (-not $Path) { return $false }
-    $Proc = Get-Process | Select-Object -ExpandProperty Path -Unique
-
-    # Single path optimization
-    if ($Path.Count -eq 1) {
-        $p = $Path[0]
-        # Path is a file
-        if (Test-Path -LiteralPath $p -PathType Leaf) {
-            return $Proc.Contains($p)
-        }
-        # Add trailing slash to directory
-        $p = Join-Path $p ''
-        foreach ($s in $Proc) {
-            if ($s.StartsWith($p)) { return $true }
-        }
-        return $false
-    }
-
-    # Build trie for multiple paths
-    $sep = [IO.Path]::DirectorySeparatorChar
-    $trie = @{}
-    foreach ($p in $Path) {
-        $node = $trie
-        foreach ($s in $p.Split($sep)) {
-            if (-not $s) { continue }
-            if (-not $node.ContainsKey($s)) {
-                $node[$s] = @{}
-            }
-            $node = $node[$s]
-        }
-        # Use $sep to mark the end of a path
-        $node[$sep] = $true
-    }
-    # Check process paths against trie
-    foreach ($p in $Proc) {
-        $node = $trie
-        foreach ($s in $p.Split($sep)) {
-            if (-not $s) { continue }
-            if (-not $node.ContainsKey($s)) { break }
-            $node = $node[$s]
-            if ($node.ContainsKey($sep)) {
-                return $true
-            }
-        }
-    }
-    return $false
-}
-
-# Ensure source and destination directories are reachable. Returns them as strings.
+# Ensure source and destination directories are reachable. Returns them as
+# strings.
 function Test-SrcAndDestDirs {
     param (
         [parameter(Mandatory)]
@@ -217,6 +165,56 @@ function Test-SrcAndDestDirs {
     return $Source, $Destination
 }
 
+# Tests if any running processes are located within the specified paths. Returns
+# the full path of the first matching process, or $null if no match.
+function Test-RunningProcess {
+    param([Parameter(Mandatory)][string[]]$Path)
+
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $procMap = @{}
+    $trie = @{}
+
+    foreach ($p in (Get-Process -ErrorAction SilentlyContinue).Path) {
+        if ($p) { $procMap[$p.ToLowerInvariant()] = $p }
+    }
+
+    foreach ($p in Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue) {
+        if (-not $p) { continue }
+        $p = $p.Path.ToLowerInvariant()
+
+        if ([System.IO.Directory]::Exists($p)) {
+            # Build trie for directories
+            $node = $trie
+            foreach ($s in $p.Split($sep)) {
+                if (-not $s) { continue }
+                if (-not $node.ContainsKey($s)) { $node[$s] = @{} }
+                $node = $node[$s]
+            }
+            # Use $sep to mark directory terminal
+            $node[$sep] = $null
+        }
+        elseif ($procMap.ContainsKey($p)) {
+            return $procMap[$p]
+        }
+    }
+    if (-not $trie.Count) { return }
+
+    # Check process paths against trie
+    foreach ($p in $procMap.Keys) {
+        $node = $trie
+        foreach ($s in $p.Split($sep)) {
+            if (-not $s) { continue }
+            if (-not $node.ContainsKey($s)) { break }
+            $node = $node[$s]
+            if ($node.ContainsKey($sep)) {
+                return $procMap[$p]
+            }
+        }
+    }
+}
+
+# Checks if any files or directories in specified paths have been modified since
+# a reference file's last write time.
 function Test-PathModifiedSince {
     param(
         [Parameter(Mandatory)][string[]]$Path,
@@ -272,15 +270,15 @@ function Update-Archive {
                 if (-not (Test-Path -LiteralPath $s)) { throw "'${s}' does not exist." }
             }
 
-            # Optional: block if processes are using sources
-            if ($Config.CheckProc -and (Test-RunningProcess -Path $srcs)) {
-                Write-Log "Archive skipped (sources in use). dst='${dst}'" -Level DEBUG
+            # Optional: skip if processes are using sources
+            if ($Config.CheckProc -and ($s = Test-RunningProcess -Path $srcs)) {
+                Write-Log "Archive skipped (sources in use). proc='${s}' sources=$($srcs.Count) dst='${dst}'" -Level DEBUG
                 continue
             }
 
             # Only archive if source files are newer than the destination archive
             if ($Config.OnlyIfNewer -and -not (Test-PathModifiedSince -Path $srcs -RefFile $dst)) {
-                Write-Log "Archive skipped (no newer sources). dst='${dst}'" -Level DEBUG
+                Write-Log "Archive skipped (no newer sources). sources=$($srcs.Count) dst='${dst}'" -Level DEBUG
                 continue
             }
 
@@ -302,10 +300,10 @@ function Update-Archive {
             foreach ($s in @($Config.Exclusion)) { if ($s) { $switches.Add("-xr!${s}") } }
 
             # Display cmdline
-            $s = foreach ($s in @($Config.SevenZip) + $switches + @('--', $dst) + $srcs) { 
+            $s = foreach ($s in @($Config.SevenZip) + $switches + @('--', $dst) + $srcs) {
                 if ($s -like '-p*') { '-p***' }
-                elseif ($s -match "[\s']") { "'{0}'" -f ($s -replace "'", "''") } 
-                else { $s } 
+                elseif ($s -match "[\s']") { "'{0}'" -f ($s -replace "'", "''") }
+                else { $s }
             }
             Write-Log ('Archive | cmd={0}' -f ($s -join ' ')) -Level DEBUG
 
@@ -316,10 +314,10 @@ function Update-Archive {
             if ($LASTEXITCODE -gt 1) { throw "7-Zip exited with code ${LASTEXITCODE}." }
 
             $s = ConvertTo-HumanSize -Bytes (Get-Item -LiteralPath $dst).Length
-            Write-Log ("Archive | result=OK code={0} dst='{1}' size={2} sources={3}" -f $LASTEXITCODE, $dst, $s, $srcs.Count) -Level INFO
+            Write-Log ("Archive | result=OK code={0} sources={1} dst='{2}' size={3}" -f $LASTEXITCODE, $srcs.Count, $dst, $s) -Level INFO
         }
         catch {
-            Write-Log "Archive | result=FAIL dst='${dst}' error=$($_.Exception.Message)" -Level ERROR
+            Write-Log ("Archive | result=FAIL error='{0}' sources={1} dst='{2}'" -f $_.Exception.Message, $srcs.Count, $dst) -Level ERROR
         }
     }
 }
@@ -331,19 +329,22 @@ function Backup-Directory {
     foreach ($Config in $Configs) {
         if (-not (Test-TaskCondition $Config)) { continue }
         $Config = Expand-EnvironmentVariables $Config
+
         try {
             $src, $dst = Test-SrcAndDestDirs -Source $Config.Source -Destination $Config.Destination
+
             # Check for running processes
-            if ($Config.CheckProc -and (Test-RunningProcess -Path $src)) {
-                Write-Log "Directory skipped (source in use). src='${src}' dst='${dst}'" -Level DEBUG
+            if ($Config.CheckProc -and ($proc = Test-RunningProcess -Path $src)) {
+                Write-Log "Directory skipped (source in use). proc='${proc}' src='${src}' dst='${dst}'" -Level DEBUG
                 continue
             }
+
             robocopy $src $dst $RoboParams $Config.RoboArgs
-            if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $($RoboCode[$LASTEXITCODE])" }
-            Write-Log ("Directory | src='{0}' -> dst='{1}' | code={2} msg='{3}'" -f $src, $dst, $LASTEXITCODE, $RoboCode[$LASTEXITCODE]) -Level INFO
+            if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $(Get-RobocopySummary $LASTEXITCODE)" }
+            Write-Log ("Directory | result=OK code={0} msg='{1}' | src='{2}' -> dst='{3}'" -f $LASTEXITCODE, (Get-RobocopySummary $LASTEXITCODE), $src, $dst) -Level INFO
         }
         catch {
-            Write-Log ("Directory | result=FAIL src='{0}' dst='{1}' error={2}" -f $Config.Source, $Config.Destination, $_.Exception.Message) -Level ERROR
+            Write-Log ("Directory | result=FAIL error='{0}' | src='{1}' -> dst='{2}' " -f $_.Exception.Message, $Config.Source, $Config.Destination) -Level ERROR
         }
     }
 }
@@ -354,23 +355,27 @@ function Backup-OneDrive {
 
     if (-not (Test-TaskCondition $Config)) { return }
     $Config = Expand-EnvironmentVariables $Config
+
     try {
         $src, $dst = Test-SrcAndDestDirs -Source $Config.Source -Destination $Config.Destination
+
         # Check for running processes
-        if ($Config.CheckProc -and (Test-RunningProcess -Path $src)) {
-            Write-Log "OneDrive skipped (source in use). src='${src}' dst='${dst}'" -Level DEBUG
+        if ($Config.CheckProc -and ($proc = Test-RunningProcess -Path $src)) {
+            Write-Log "OneDrive skipped (source in use). proc='${proc}' src='${src}' dst='${dst}'" -Level DEBUG
             return
         }
+
         robocopy $src $dst $RoboParams /MT /XA:S
-        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $($RoboCode[$LASTEXITCODE])" }
-        Write-Log ("OneDrive | src='{0}' -> dst='{1}' | code={2} msg='{3}'" -f $src, $dst, $LASTEXITCODE, $RoboCode[$LASTEXITCODE]) -Level INFO
+        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $(Get-RobocopySummary $LASTEXITCODE)" }
+
+        # Apply unpinning to the source path.
+        if ($Config.AutoUnpin) { Set-UnpinIfNotPinned -Path $src }
+
+        Write-Log ("OneDrive | result=OK code={0} msg='{1}' | src='{2}' -> dst='{3}'" -f $LASTEXITCODE, (Get-RobocopySummary $LASTEXITCODE), $src, $dst) -Level INFO
     }
     catch {
-        Write-Log ("OneDrive | result=FAIL src='{0}' dst='{1}' error={2}" -f $Config.Source, $Config.Destination, $_.Exception.Message) -Level ERROR
-        return
+        Write-Log ("OneDrive | result=FAIL error='{0}' | src='{1}' -> dst='{2}' " -f $_.Exception.Message, $Config.Source, $Config.Destination) -Level ERROR
     }
-    # Apply unpinning to the source path.
-    if ($Config.AutoUnpin) { Set-UnpinIfNotPinned -Path $src }
 }
 
 <#
@@ -430,17 +435,17 @@ function Backup-VMware {
                 foreach ($file in Get-ChildItem -LiteralPath $dir.FullName -ErrorAction SilentlyContinue) {
                     if ($exts.Contains($file.Extension)) {
                         $exclusion.Add($dir.FullName)
-                        Write-Log "VMware skip VM (running): '$($dir.Name)'" -Level DEBUG
+                        Write-Log "VMware skip VM (running): '$($dir.FullName)'" -Level DEBUG
                         break
                     }
                 }
             }
         }
-        # Keep VMs that only exist in the destination. Excluding dirs on the right
-        # prevents them from being removed.
+        # Keep VMs that only exist in the destination. Excluding dirs on the
+        # right prevents them from being removed.
         if ($Config.KeepExtra) {
             if ($leftDirs.Count -eq $exclusion.Count) {
-                Write-Log "VMware skipped (nothing to copy). dst='${dst}'" -Level DEBUG
+                Write-Log "VMware skipped (nothing to copy). src='${src}' dst='${dst}'" -Level DEBUG
                 return
             }
             foreach ($dir in Compare-Object $leftDirs $rightDirs -Property Name -PassThru) {
@@ -451,11 +456,11 @@ function Backup-VMware {
         }
         # Mirror the directory using robocopy
         robocopy $src $dst $RoboParams /XF '*.log' '*.scoreboard' /XD 'caches' $exclusion
-        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $($RoboCode[$LASTEXITCODE])" }
-        Write-Log ("VMware | src='{0}' -> dst='{1}' | code={2} msg='{3}'" -f $src, $dst, $LASTEXITCODE, $RoboCode[$LASTEXITCODE]) -Level INFO
+        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE} ($(Get-RobocopySummary $LASTEXITCODE))." }
+        Write-Log ("VMware | result=OK code={0} msg='{1}' | src='{2}' -> dst='{3}'" -f $LASTEXITCODE, (Get-RobocopySummary $LASTEXITCODE), $src, $dst) -Level INFO
     }
     catch {
-        Write-Log ("VMware | result=FAIL src='{0}' dst='{1}' error={2}" -f $Config.Source, $Config.Destination, $_.Exception.Message) -Level ERROR
+        Write-Log ("VMware | result=FAIL error='{0}' | src='{1}' -> dst='{2}' " -f $_.Exception.Message, $Config.Source, $Config.Destination) -Level ERROR
     }
 }
 
