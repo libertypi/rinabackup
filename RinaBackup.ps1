@@ -223,18 +223,34 @@ function Test-PathModifiedSince {
         [Parameter(Mandatory)][string]$RefFile
     )
 
-    try { $RefTimeUtc = (Get-Item -LiteralPath $RefFile -ErrorAction Stop).LastWriteTimeUtc }
-    catch { return $true }
+    # If the ref file doesn't exist, treat as "out of date".
+    if (-not [System.IO.File]::Exists($RefFile)) { return $true }
+    $RefTimeUtc = [System.IO.File]::GetLastWriteTimeUtc($RefFile)
+
+    $queue = [System.Collections.Generic.Queue[System.IO.DirectoryInfo]]::new()
+    $skipMask = [System.IO.FileAttributes]::Hidden `
+        -bor [System.IO.FileAttributes]::System `
+        -bor [System.IO.FileAttributes]::ReparsePoint
 
     foreach ($p in $Path) {
-        try { $p = Get-Item -LiteralPath $p -ErrorAction Stop } catch { continue }
-        if ($p.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
-        if (-not $p.PSIsContainer) { continue }
-        if (Get-ChildItem -LiteralPath $p.FullName -Recurse -ErrorAction SilentlyContinue |
-                Where-Object -Property LastWriteTimeUtc -GT $RefTimeUtc |
-                Select-Object -First 1) {
-            return $true
+        try {
+            if ([System.IO.File]::GetLastWriteTimeUtc($p) -gt $RefTimeUtc) { return $true }
+            if (-not [System.IO.Directory]::Exists($p)) { continue }
+            # BFS traversal
+            $queue.Enqueue([System.IO.DirectoryInfo]::new($p))
+            while ($queue.Count) {
+                $p = $queue.Dequeue()
+                try {
+                    foreach ($e in $p.EnumerateFileSystemInfos()) {
+                        if ($e.Attributes -band $skipMask) { continue }
+                        if ($e.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
+                        if ($e -is [System.IO.DirectoryInfo]) { $queue.Enqueue($e) }
+                    }
+                }
+                catch {}
+            }
         }
+        catch {}
     }
     return $false
 }
@@ -284,6 +300,14 @@ function Update-Archive {
 
             # Exclusions
             foreach ($s in @($Config.Exclusion)) { if ($s) { $switches.Add("-xr!${s}") } }
+
+            # Display cmdline
+            $s = foreach ($s in @($Config.SevenZip) + $switches + @('--', $dst) + $srcs) { 
+                if ($s -like '-p*') { '-p***' }
+                elseif ($s -match "[\s']") { "'{0}'" -f ($s -replace "'", "''") } 
+                else { $s } 
+            }
+            Write-Log ('Archive | cmd={0}' -f ($s -join ' ')) -Level DEBUG
 
             # Execute 7-Zip
             & $Config.SevenZip $switches -- $dst $srcs
