@@ -37,7 +37,7 @@ param(
 )
 
 $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
-$RoboParams = @('/MIR', '/J', '/DCOPY:DAT', '/R:3')
+$RoboParams = @('/MIR', '/J', '/DCOPY:DAT', '/R:3', '/XJ')
 
 function Get-RobocopySummary {
     param([int]$Code)
@@ -222,27 +222,25 @@ function Test-PathModifiedSince {
     )
 
     # If the ref file doesn't exist, treat as "out of date".
-    if (-not [System.IO.File]::Exists($RefFile)) { return $true }
-    $RefTimeUtc = [System.IO.File]::GetLastWriteTimeUtc($RefFile)
+    if (-not [IO.File]::Exists($RefFile)) { return $true }
+    $RefTimeUtc = [IO.File]::GetLastWriteTimeUtc($RefFile)
 
-    $queue = [System.Collections.Generic.Queue[System.IO.DirectoryInfo]]::new()
-    $skipMask = [System.IO.FileAttributes]::Hidden `
-        -bor [System.IO.FileAttributes]::System `
-        -bor [System.IO.FileAttributes]::ReparsePoint
+    $queue = [System.Collections.Generic.Queue[IO.DirectoryInfo]]::new()
+    $skipMask = [IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System -bor [IO.FileAttributes]::ReparsePoint
 
     foreach ($p in $Path) {
         try {
-            if ([System.IO.File]::GetLastWriteTimeUtc($p) -gt $RefTimeUtc) { return $true }
-            if (-not [System.IO.Directory]::Exists($p)) { continue }
+            if ([IO.File]::GetLastWriteTimeUtc($p) -gt $RefTimeUtc) { return $true }
+            if (-not [IO.Directory]::Exists($p)) { continue }
             # BFS traversal
-            $queue.Enqueue([System.IO.DirectoryInfo]::new($p))
+            $queue.Enqueue([IO.DirectoryInfo]::new($p))
             while ($queue.Count) {
                 $p = $queue.Dequeue()
                 try {
                     foreach ($e in $p.EnumerateFileSystemInfos()) {
                         if ($e.Attributes -band $skipMask) { continue }
                         if ($e.LastWriteTimeUtc -gt $RefTimeUtc) { return $true }
-                        if ($e -is [System.IO.DirectoryInfo]) { $queue.Enqueue($e) }
+                        if ($e -is [IO.DirectoryInfo]) { $queue.Enqueue($e) }
                     }
                 }
                 catch {}
@@ -282,33 +280,38 @@ function Update-Archive {
                 continue
             }
 
-            # Build switch list
-            $switches = [System.Collections.Generic.List[string]]@('u', '-up0q0r2x2y2z1w2', '-t7z')
-            $switches.AddRange([string[]]$Config.Parameters)
-            if ($Config.OnlyIfNewer) { $switches.Add('-stl') }
+            # Build parameter list
+            $params = [System.Collections.Generic.List[string]]@('u', '-up0q0r2x2y2z1w2', '-t7z')
+            $params.AddRange([string[]]$Config.Parameters)
+            if ($Config.OnlyIfNewer) { $params.Add('-stl') }
 
             # Password
             if (-not [string]::IsNullOrEmpty($Config.Password)) {
                 $s = ConvertTo-SecureString -String $Config.Password -ErrorAction Stop
                 $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
-                $switches.Add('-mhe=on')
-                $switches.Add("-p$([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR))")
+                $params.Add('-mhe=on')
+                $params.Add("-p$([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR))")
                 [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
             }
 
             # Exclusions
-            foreach ($s in @($Config.Exclusion)) { if ($s) { $switches.Add("-xr!${s}") } }
+            foreach ($s in @($Config.Exclusion)) { if ($s) { $params.Add("-xr!${s}") } }
 
-            # Display cmdline
-            $s = foreach ($s in @($Config.SevenZip) + $switches + @('--', $dst) + $srcs) {
-                if ($s -like '-p*') { '-p***' }
+            # Complete the command line
+            $params.Add('--')
+            $params.Add($dst)
+            $params.AddRange($srcs)
+
+            # Display command line
+            $s = foreach ($s in @($Config.SevenZip) + $params) {
+                if ($s.StartsWith('-p')) { '-p***' }
                 elseif ($s -match "[\s']") { "'{0}'" -f ($s -replace "'", "''") }
                 else { $s }
             }
             Write-Log ('Archive | cmd={0}' -f ($s -join ' ')) -Level DEBUG
 
             # Execute 7-Zip
-            & $Config.SevenZip $switches -- $dst $srcs
+            & $Config.SevenZip $params
 
             # 0: OK, 1: warning (non-fatal)
             if ($LASTEXITCODE -gt 1) { throw "7-Zip exited with code ${LASTEXITCODE}." }
@@ -340,7 +343,7 @@ function Backup-Directory {
             }
 
             robocopy $src $dst $RoboParams $Config.RoboArgs
-            if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $(Get-RobocopySummary $LASTEXITCODE)" }
+            if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. ($(Get-RobocopySummary $LASTEXITCODE))" }
             Write-Log ("Directory | result=OK code={0} msg='{1}' | src='{2}' -> dst='{3}'" -f $LASTEXITCODE, (Get-RobocopySummary $LASTEXITCODE), $src, $dst) -Level INFO
         }
         catch {
@@ -366,21 +369,23 @@ function Backup-OneDrive {
         }
 
         robocopy $src $dst $RoboParams /MT /XA:S
-        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. $(Get-RobocopySummary $LASTEXITCODE)" }
 
-        # Apply unpinning to the source path.
-        if ($Config.AutoUnpin) { Set-UnpinIfNotPinned -Path $src }
-
+        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. ($(Get-RobocopySummary $LASTEXITCODE))" }
         Write-Log ("OneDrive | result=OK code={0} msg='{1}' | src='{2}' -> dst='{3}'" -f $LASTEXITCODE, (Get-RobocopySummary $LASTEXITCODE), $src, $dst) -Level INFO
     }
     catch {
         Write-Log ("OneDrive | result=FAIL error='{0}' | src='{1}' -> dst='{2}' " -f $_.Exception.Message, $Config.Source, $Config.Destination) -Level ERROR
+        return
     }
+    # Apply unpinning to the source.
+    if ($Config.AutoUnpin) { Set-UnpinIfNotPinned -Path $src }
 }
 
 <#
-    Unpins all files in the OneDrive folder except those manually pinned (Always
-    keeps on this device). Converts 'locally available' files to 'online-only'.
+    Frees up space for all items in the OneDrive folder except those manually
+    pinned ("Always keep on this device"). If a file is neither PINNED nor
+    UNPINNED, it is "locally available." Setting UNPINNED tells the OneDrive
+    client to dehydrate it to "online-only."
 
     - OneDrive file attributes:
         FILE_ATTRIBUTE_PINNED   : 0x00080000
@@ -406,10 +411,25 @@ function Set-UnpinIfNotPinned {
 
     $PINNED = 0x00080000
     $UNPINNED = 0x00100000
-    $COMBINED = $UNPINNED -bor $PINNED
-    # If neither Unpinned nor Pinned, add Unpinned attribute.
-    Get-ChildItem -LiteralPath $Path -Recurse -Attributes !Offline+!ReadOnly | ForEach-Object {
-        if (!($_.Attributes -band $COMBINED)) { $_.Attributes = $_.Attributes -bor $UNPINNED }
+    $pruneMask = [IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System
+    $skipMask = $PINNED -bor $UNPINNED -bor [IO.FileAttributes]::Offline
+
+    $stack = [System.Collections.Generic.Stack[IO.DirectoryInfo]]::new()
+    $stack.Push([IO.DirectoryInfo]::new($Path))
+
+    while ($stack.Count) {
+        $d = $stack.Pop()
+        try {
+            foreach ($e in $d.EnumerateFileSystemInfos()) {
+                $ea = $e.Attributes
+                if ($ea -band $pruneMask) { continue }
+                if (!($ea -band $skipMask)) { $e.Attributes = $ea -bor $UNPINNED }
+                if ($e -is [IO.DirectoryInfo]) { $stack.Push($e) }
+            }
+        }
+        catch {
+            Write-Log ("OneDrive | enumerate failed dir='{0}' error='{1}'" -f $d.FullName, $_.Exception.Message) -Level WARNING
+        }
     }
 }
 
@@ -456,7 +476,7 @@ function Backup-VMware {
         }
         # Mirror the directory using robocopy
         robocopy $src $dst $RoboParams /XF '*.log' '*.scoreboard' /XD 'caches' $exclusion
-        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE} ($(Get-RobocopySummary $LASTEXITCODE))." }
+        if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit code ${LASTEXITCODE}. ($(Get-RobocopySummary $LASTEXITCODE))" }
         Write-Log ("VMware | result=OK code={0} msg='{1}' | src='{2}' -> dst='{3}'" -f $LASTEXITCODE, (Get-RobocopySummary $LASTEXITCODE), $src, $dst) -Level INFO
     }
     catch {
