@@ -37,7 +37,7 @@ param(
 )
 
 $LogFile = Join-Path $PSScriptRoot "${env:COMPUTERNAME}.log"
-$RoboParams = @('/MIR', '/J', '/DCOPY:DAT', '/R:3', '/XJ')
+$RoboParams = @('/MIR', '/J', '/DCOPY:DATX', '/R:3', '/XJ')
 
 function Get-RobocopySummary {
     param([int]$Code)
